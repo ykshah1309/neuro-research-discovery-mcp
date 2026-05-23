@@ -23,6 +23,15 @@ from typing import Any
 
 _logger = logging.getLogger("neuro_research_discovery.disk_cache")
 
+# Bump this when the on-disk schema changes. Old files with a different
+# schema_version are ignored on load (treated as a cache miss) so a downgrade
+# or upgrade can't deserialize into a mismatched shape.
+NEUROVAULT_INDEX_SCHEMA_VERSION = 2
+
+# Hard cap on the on-disk file size. NeuroVault projections are ~200 bytes each;
+# 17K collections ~= 3.4 MB. We allow 20 MB of growth before refusing to load.
+NEUROVAULT_INDEX_MAX_BYTES = 20 * 1024 * 1024
+
 
 def _cache_dir() -> Path:
     if os.name == "nt":
@@ -41,9 +50,23 @@ def load_neurovault_index() -> dict[str, Any] | None:
     if not p.is_file():
         return None
     try:
+        size = p.stat().st_size
+        if size > NEUROVAULT_INDEX_MAX_BYTES:
+            _logger.warning(
+                "Refusing to load NeuroVault index: file is %.1f MB (>%d MB cap). "
+                "Delete %s and let it rebuild.",
+                size / 1024 / 1024, NEUROVAULT_INDEX_MAX_BYTES // 1024 // 1024, p,
+            )
+            return None
         with open(p, "r", encoding="utf-8") as fh:
             data = json.load(fh)
         if not isinstance(data, dict) or "projections" not in data:
+            return None
+        if data.get("schema_version") != NEUROVAULT_INDEX_SCHEMA_VERSION:
+            _logger.info(
+                "NeuroVault index on disk has schema_version=%r; expected %d. Ignoring.",
+                data.get("schema_version"), NEUROVAULT_INDEX_SCHEMA_VERSION,
+            )
             return None
         return data
     except (OSError, json.JSONDecodeError) as exc:
@@ -60,6 +83,7 @@ def save_neurovault_index(
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         payload = {
+            "schema_version": NEUROVAULT_INDEX_SCHEMA_VERSION,
             "built_at": time.time(),
             "ttl": int(ttl_seconds),
             "partial": bool(partial),
@@ -70,6 +94,13 @@ def save_neurovault_index(
         tmp = p.with_suffix(".json.tmp")
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(payload, fh)
+        if tmp.stat().st_size > NEUROVAULT_INDEX_MAX_BYTES:
+            _logger.warning(
+                "Refusing to commit NeuroVault index: serialized size %d bytes exceeds cap.",
+                tmp.stat().st_size,
+            )
+            tmp.unlink(missing_ok=True)
+            return
         os.replace(tmp, p)
     except OSError as exc:
         _logger.warning("Failed to persist NeuroVault index to %s: %s", p, exc)

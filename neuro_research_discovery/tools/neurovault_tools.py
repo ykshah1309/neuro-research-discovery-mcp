@@ -22,7 +22,7 @@ from ..models import (
     SearchNeuroVaultCollectionsInput,
     SearchNeuroVaultImagesInput,
 )
-from ..text_safety import truncate, truncate_authors, truncate_title
+from ..text_safety import make_untrusted, truncate_authors, truncate_title
 
 # Number of matching collections we'll expand into image results before stopping.
 # Caps fan-out for search_neurovault_images.
@@ -43,7 +43,7 @@ def _collection_from_projection(p: dict[str, Any]) -> NeuroVaultCollection:
     return NeuroVaultCollection(
         collection_id=cid,
         name=truncate_title(p.get("name") or ""),
-        description=truncate(p.get("description") or ""),
+        description=make_untrusted(p.get("description") or "", source="neurovault"),
         doi=p.get("DOI") or None,
         preprint_doi=p.get("preprint_DOI") or None,
         authors=truncate_authors(p.get("authors")),
@@ -59,7 +59,7 @@ def _collection_from_full(c: dict[str, Any]) -> NeuroVaultCollection:
     return NeuroVaultCollection(
         collection_id=cid,
         name=truncate_title(c.get("name") or ""),
-        description=truncate(c.get("description") or ""),
+        description=make_untrusted(c.get("description") or "", source="neurovault"),
         doi=c.get("DOI"),
         preprint_doi=c.get("preprint_DOI"),
         authors=truncate_authors(c.get("authors")),

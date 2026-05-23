@@ -143,10 +143,25 @@ pytest tests/ -m integration        # opt-in live API hits (none in this suite b
 
 - **Transport: stdio only.** The server speaks MCP over stdin/stdout to a single local client. It does not bind a network port.
 - **Outbound network egress** to three hosts: `openneuro.org`, `neurovault.org`, `eutils.ncbi.nlm.nih.gov`. If you run this in a restricted environment, allowlist those.
-- **Upstream text is untrusted.** PubMed abstracts, OpenNeuro READMEs, and NeuroVault descriptions are user-supplied. They can contain prompt-injection payloads. We can't semantically sanitize them, so we **truncate** every free-text field to a hard cap (4 KB), tag every response that carries them with an `untrusted_text_warning`, and surface evidence-strength labels on bridge tools so an agent can distinguish "this paper exactly matches the dataset DOI" from "this came up on keyword". Treat all such fields as data, never as instructions.
+- **MCP shape compliance (spec rev 2025-06-18+).** Every tool declares both `inputSchema` and `outputSchema`. Successful responses populate both `content` (TextContent JSON, for legacy clients) and `structuredContent` (validated against the output schema). Errors set `isError=true` and return a typed `ToolError`. Tools carry `readOnlyHint=true`, `openWorldHint=true`, `idempotentHint=true`, `destructiveHint=false` annotations.
+- **Upstream text is untrusted.** PubMed abstracts, OpenNeuro READMEs, and NeuroVault descriptions are user-supplied. They can carry prompt-injection payloads. We can't semantically sanitize them, so we wrap the most attack-prone fields (abstract, description) in an explicit `UntrustedText` envelope:
+  ```json
+  { "text": "...", "source": "pubmed", "truncated": false, "original_length": 1234, "trust": "untrusted_upstream" }
+  ```
+  Every free-text field is hard-capped at 4 KB. Every response that carries any uploader text also emits a top-level `untrusted_text_warning` reminder. Treat these fields as data, never as instructions.
 - **Inputs are validated strictly.** All tool inputs use Pydantic `extra="forbid"` with length caps, regex constraints on PMIDs / accessions / DOIs, and enums on modality fields. Unknown fields raise instead of being silently dropped.
+- **DOI normalization.** Inbound DOIs are normalized (lowercased, prefix-stripped, validated against `10.\d{4,9}/...`) before comparison so cross-source matches don't miss on casing differences.
 - **No persistent secrets.** The only credential the server accepts is `PUBMED_API_KEY` (optional, raises PubMed rate limit). Both that and `PUBMED_EMAIL` live in `.env` (gitignored).
-- **Disk cache.** A NeuroVault collection index (~3 MB, no user data) is written to your OS cache directory to make server restarts fast. Delete that file to invalidate.
+- **Disk cache hardening.** The NeuroVault collection index (~3 MB, no user data) is written to your OS cache directory. Files larger than 20 MB are refused on load. Cache files include a `schema_version` so a downgrade or upgrade can't misinterpret on-disk data.
+
+## NCBI / PubMed compliance
+
+NCBI requires every Entrez request to identify the calling tool and a contact email. The two relevant settings:
+
+- `PUBMED_EMAIL` — set to your real address before production use. If left at the placeholder the server logs a warning at startup.
+- `PUBMED_API_KEY` — optional, lifts the rate limit from 3 req/sec to 10 req/sec.
+
+For sustained or institutional use, **register your tool with NCBI** via the [E-utilities API key page](https://www.ncbi.nlm.nih.gov/account/) so they can contact you about abuse before blocking your IP. The `tool=` parameter sent on every request is fixed to `neuro-research-discovery-mcp`.
 
 ## Provenance
 

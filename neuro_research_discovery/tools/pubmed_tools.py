@@ -17,18 +17,20 @@ from ..models import (
     PubMedSearchResult,
     SearchPubMedInput,
 )
-from ..text_safety import truncate, truncate_title
+from ..doi import normalize_doi
+from ..text_safety import make_untrusted, truncate_title
 
 
 def _article(record: dict, include_abstract: bool = True) -> PubMedArticle:
+    abstract_text = record.get("abstract") or "" if include_abstract else ""
     return PubMedArticle(
         pmid=record["pmid"],
         title=truncate_title(record.get("title") or ""),
         authors=record.get("authors") or [],
         journal=record.get("journal") or "",
         year=record.get("year"),
-        abstract=truncate(record.get("abstract") or "") if include_abstract else "",
-        doi=record.get("doi"),
+        abstract=make_untrusted(abstract_text, source="pubmed"),
+        doi=normalize_doi(record.get("doi")),
         keywords=record.get("keywords") or [],
         mesh_terms=record.get("mesh_terms") or [],
     )
@@ -73,7 +75,7 @@ async def get_pubmed_article_abstract(
     return PubMedAbstract(
         pmid=r["pmid"],
         title=truncate_title(r.get("title") or ""),
-        abstract=truncate(r.get("abstract") or ""),
+        abstract=make_untrusted(r.get("abstract") or "", source="pubmed"),
     )
 
 

@@ -45,3 +45,17 @@ def cap_list(items: list, max_items: int = MAX_LIST_ITEMS) -> tuple[list, bool]:
     if len(items) <= max_items:
         return items, False
     return items[:max_items], True
+
+
+def make_untrusted(text: str | None, source: str, max_len: int = MAX_FIELD_LEN):
+    """Build an UntrustedText envelope. Imports inline to avoid a cycle."""
+    from .models import UntrustedText  # noqa: WPS433
+    raw = text or ""
+    original_length = len(raw)
+    truncated_text = truncate(raw, max_len=max_len)
+    return UntrustedText(
+        text=truncated_text,
+        source=source,  # type: ignore[arg-type]
+        truncated=(original_length > len(truncated_text)),
+        original_length=original_length,
+    )

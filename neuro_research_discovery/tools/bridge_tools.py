@@ -24,6 +24,7 @@ from typing import Any
 from ..clients.neurovault import NeuroVaultClient
 from ..clients.openneuro import OpenNeuroClient
 from ..clients.pubmed import PubMedClient
+from ..doi import equal_dois, normalize_doi
 from ..models import (
     ComprehensiveLiteratureSearchInput,
     CrossSourceResult,
@@ -38,7 +39,7 @@ from ..models import (
 )
 from .neurovault_tools import _collection_from_projection, search_neurovault_collections
 from .openneuro_tools import _collect_dois, _summary, search_openneuro_datasets
-from .pubmed_tools import search_pubmed
+from .pubmed_tools import _article, search_pubmed
 
 LITERATURE_TOP_PAPERS = 5
 LITERATURE_MESH_TOP_TERMS = 5
@@ -82,7 +83,7 @@ async def find_papers_using_dataset(
 
     pmids = [p for p in await asyncio.gather(*[resolve(d) for d in dois]) if p]
     articles_raw = await pubmed.efetch_articles(pmids) if pmids else []
-    articles = [PubMedArticle(**r) for r in articles_raw]
+    articles = [_article(r) for r in articles_raw]
 
     evidence: dict[str, str] = {_on_key(summary.accession_number): "doi_exact"}
     for a in articles:
@@ -111,8 +112,9 @@ async def find_neurovault_maps_for_paper(
             query=params.pmid,
             notes=f"PubMed has no record for PMID {params.pmid}.",
         )
-    article = PubMedArticle(**records[0])
-    if not article.doi:
+    article = _article(records[0])
+    article_doi = normalize_doi(article.doi)
+    if not article_doi:
         return CrossSourceResult(
             query=params.pmid,
             pubmed_articles=[article],
@@ -121,7 +123,7 @@ async def find_neurovault_maps_for_paper(
         )
 
     index = await neurovault.get_index()
-    matches = _doi_match_collections(index, article.doi)
+    matches = _doi_match_collections(index, article_doi)
     collections: list[NeuroVaultCollection] = [_collection_from_projection(p) for p in matches]
 
     evidence: dict[str, str] = {_pm_key(article.pmid): "doi_exact"}
@@ -279,11 +281,17 @@ async def comprehensive_literature_search(
 
 
 def _doi_match_collections(index: list[dict[str, Any]], doi: str) -> list[dict[str, Any]]:
-    """Case-insensitive DOI match against both `DOI` and `preprint_DOI` fields."""
-    target = doi.lower()
+    """Normalized DOI match against both `DOI` and `preprint_DOI` fields.
+
+    Uses doi.normalize_doi so we match across casing and prefix differences
+    (`https://doi.org/`, `doi:`, mixed case, etc.).
+    """
+    target = normalize_doi(doi)
+    if not target:
+        return []
     return [
         p for p in index
-        if ((p.get("DOI") or "").lower() == target) or ((p.get("preprint_DOI") or "").lower() == target)
+        if equal_dois(p.get("DOI"), target) or equal_dois(p.get("preprint_DOI"), target)
     ]
 
 

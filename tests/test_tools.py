@@ -32,7 +32,7 @@ async def test_get_openneuro_dataset_extracts_all_fields():
                 "name": "Raw",
                 "metadata": {
                     "species": "Human",
-                    "associatedPaperDOI": "10.1/paper",
+                    "associatedPaperDOI": "10.1234/paper",
                     "openneuroPaperDOI": "",
                     "studyDomain": "fMRI",
                 },
@@ -73,9 +73,12 @@ async def test_get_openneuro_dataset_extracts_all_fields():
         assert result.num_subjects == 2
         assert result.species == "Human"
         assert result.tasks == ["rest"]
-        # DatasetDOI plus associatedPaperDOI should both be picked up
+        # description is now an UntrustedText envelope
+        assert result.description.source == "openneuro"
+        assert "demo dataset" in result.description.text.lower()
+        # DatasetDOI plus associatedPaperDOI should both be picked up (normalized)
         assert "10.18112/openneuro.ds000001" in result.associated_publications
-        assert "10.1/paper" in result.associated_publications
+        assert "10.1234/paper" in result.associated_publications
     finally:
         await client.aclose()
 
@@ -158,17 +161,17 @@ async def test_find_neurovault_maps_for_paper_matches_doi(fake_entrez: FakeEntre
         "journal": "J",
         "year": "2024",
         "abstract": "abs",
-        "doi": "10.1/match",
+        "doi": "10.1234/match",
         "mesh": [],
     }])
     pubmed = PubMedClient()
     nv = NeuroVaultClient()
 
     collections = [
-        {"id": 7, "name": "Matching", "description": "", "DOI": "10.1/match",
+        {"id": 7, "name": "Matching", "description": "", "DOI": "10.1234/match",
          "preprint_DOI": None, "authors": "", "journal_name": "", "paper_url": None,
          "number_of_images": 3, "download_url": None},
-        {"id": 8, "name": "Not matching", "description": "", "DOI": "10.2/other",
+        {"id": 8, "name": "Not matching", "description": "", "DOI": "10.5555/other",
          "preprint_DOI": None, "authors": "", "journal_name": "", "paper_url": None,
          "number_of_images": 1, "download_url": None},
     ]
@@ -193,14 +196,14 @@ async def test_find_neurovault_maps_for_paper_emits_doi_exact_evidence(fake_entr
     """Bridge tools must label *how* each result is linked to the query."""
     fake_entrez.efetch_response = make_pubmed_efetch_xml([{
         "pmid": "7777", "title": "P", "authors": [{"first": "X", "last": "Y"}],
-        "journal": "J", "year": "2024", "abstract": "abs", "doi": "10.99/exact", "mesh": [],
+        "journal": "J", "year": "2024", "abstract": "abs", "doi": "10.9999/exact", "mesh": [],
     }])
     pubmed = PubMedClient()
     nv = NeuroVaultClient()
 
     def handler(req):
         return httpx.Response(200, json={"count": 1, "next": None, "previous": None, "results": [
-            {"id": 99, "name": "X", "description": "", "DOI": "10.99/EXACT",
+            {"id": 99, "name": "X", "description": "", "DOI": "10.9999/EXACT",
              "preprint_DOI": None, "authors": None, "journal_name": None, "paper_url": None,
              "number_of_images": 1, "download_url": None},
         ]})
@@ -254,7 +257,7 @@ async def test_find_papers_using_dataset_chains_doi_lookup(fake_entrez: FakeEntr
         "journal": "Cool J",
         "year": "2023",
         "abstract": "abstract here",
-        "doi": "10.1/paper",
+        "doi": "10.1234/paper",
         "mesh": [],
     }])
 
@@ -265,7 +268,7 @@ async def test_find_papers_using_dataset_chains_doi_lookup(fake_entrez: FakeEntr
         return httpx.Response(200, json={"data": {"dataset": {
             "id": "ds000099",
             "name": "X",
-            "metadata": {"species": "Human", "associatedPaperDOI": "10.1/paper"},
+            "metadata": {"species": "Human", "associatedPaperDOI": "10.1234/paper"},
             "latestSnapshot": {
                 "tag": "1.0.0", "readme": "",
                 "description": {"Name": "X", "DatasetDOI": "10.18112/openneuro.ds000099"},

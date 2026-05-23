@@ -1,15 +1,22 @@
 """MCP server entry point.
 
-Wires 17 typed tools across the four families to the MCP stdio transport. All
-upstream errors are caught and returned as a structured ToolError JSON inside
-TextContent — exceptions never propagate to the client.
+Wires 17 typed tools across the four families to the MCP stdio transport.
+
+MCP shape compliance (v0.3, spec rev 2025-06-18+):
+- Every tool declares both `inputSchema` and `outputSchema` (built from Pydantic).
+- Every successful response returns `(content, structuredContent)` so legacy
+  clients see TextContent JSON and modern clients see validated structured data.
+- Tool errors return `CallToolResult` with `isError=True` plus a structured
+  `ToolError` payload (also in both shapes).
+- Every tool carries ToolAnnotations: read-only (no upstream mutations),
+  open-world (depends on external services), idempotent (cached).
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 import mcp.server.stdio
 import mcp.types as types
@@ -24,6 +31,7 @@ from .clients.pubmed import PubMedClient
 from .errors import ToolError, classify_exception
 from .models import (
     ComprehensiveLiteratureSearchInput,
+    CrossSourceResult,
     FindDatasetsForTopicInput,
     FindNeuroVaultMapsForPaperInput,
     FindPapersUsingDatasetInput,
@@ -36,6 +44,19 @@ from .models import (
     GetPubMedAbstractInput,
     GetPubMedArticleInput,
     ListOpenNeuroDatasetFilesInput,
+    NeuroVaultCollection,
+    NeuroVaultCollectionPublications,
+    NeuroVaultCollectionSearchResult,
+    NeuroVaultImage,
+    NeuroVaultImageSearchResult,
+    OpenNeuroDataset,
+    OpenNeuroFileListing,
+    OpenNeuroPublications,
+    OpenNeuroSearchResult,
+    PubMedAbstract,
+    PubMedArticle,
+    PubMedRelatedResult,
+    PubMedSearchResult,
     SearchNeuroVaultCollectionsInput,
     SearchNeuroVaultImagesInput,
     SearchOpenNeuroInput,
@@ -78,160 +99,167 @@ def _schema(model: type[BaseModel]) -> dict[str, Any]:
     return model.model_json_schema()
 
 
+_READONLY_OPEN_WORLD = types.ToolAnnotations(
+    title=None,
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=True,
+)
+
+
+def _tool(name: str, description: str, in_model: type[BaseModel], out_model: type[BaseModel]) -> types.Tool:
+    return types.Tool(
+        name=name,
+        description=description,
+        inputSchema=_schema(in_model),
+        outputSchema=_schema(out_model),
+        annotations=_READONLY_OPEN_WORLD,
+    )
+
+
 @server.list_tools()
 async def _list_tools() -> list[types.Tool]:
     return [
         # ---- Family A: OpenNeuro ----
-        types.Tool(
-            name="search_openneuro_datasets",
-            description=(
-                "Search OpenNeuro for BIDS-formatted neuroimaging datasets by keyword. "
-                "Optional top-level modality filter ('mri', 'eeg', 'meg', 'ieeg', 'pet', 'nirs'). "
-                "Returns lightweight summaries (accession, title, modalities, subject count, tasks)."
-            ),
-            inputSchema=_schema(SearchOpenNeuroInput),
+        _tool(
+            "search_openneuro_datasets",
+            "Search OpenNeuro for BIDS-formatted neuroimaging datasets by keyword. "
+            "Optional top-level modality filter ('mri', 'eeg', 'meg', 'ieeg', 'pet', 'nirs'). "
+            "Returns lightweight summaries (accession, title, modalities, subject count, tasks).",
+            SearchOpenNeuroInput, OpenNeuroSearchResult,
         ),
-        types.Tool(
-            name="get_openneuro_dataset",
-            description=(
-                "Get full metadata for one OpenNeuro dataset by accession (e.g. 'ds000001'): "
-                "title, description excerpt, modalities, subject/session counts, tasks, species, "
-                "download URL, associated paper DOIs."
-            ),
-            inputSchema=_schema(GetOpenNeuroDatasetInput),
+        _tool(
+            "get_openneuro_dataset",
+            "Get full metadata for one OpenNeuro dataset by accession (e.g. 'ds000001'): "
+            "title, description excerpt (UntrustedText envelope), modalities, subject/session counts, "
+            "tasks, species, download URL, associated paper DOIs (normalized).",
+            GetOpenNeuroDatasetInput, OpenNeuroDataset,
         ),
-        types.Tool(
-            name="list_openneuro_dataset_files",
-            description=(
-                "List files in the latest snapshot of an OpenNeuro dataset. Optional `modality` "
-                "filter (e.g. 'anat', 'func', 'dwi') descends into per-subject modality directories."
-            ),
-            inputSchema=_schema(ListOpenNeuroDatasetFilesInput),
+        _tool(
+            "list_openneuro_dataset_files",
+            "List files in the latest snapshot of an OpenNeuro dataset. Optional `modality` "
+            "filter (anat / func / dwi / ...) uses files(recursive: true) for a single-call walk. "
+            "Listings are capped at 200 entries; `truncated` flag reports when capped.",
+            ListOpenNeuroDatasetFilesInput, OpenNeuroFileListing,
         ),
-        types.Tool(
-            name="get_openneuro_dataset_publications",
-            description=(
-                "Get DOIs and reference links associated with an OpenNeuro dataset: the dataset's "
-                "own DOI plus any author-supplied paper DOIs and reference URLs."
-            ),
-            inputSchema=_schema(GetOpenNeuroPublicationsInput),
+        _tool(
+            "get_openneuro_dataset_publications",
+            "Get DOIs and reference links associated with an OpenNeuro dataset: the dataset's "
+            "own DOI plus any author-supplied paper DOIs and reference URLs.",
+            GetOpenNeuroPublicationsInput, OpenNeuroPublications,
         ),
 
         # ---- Family B: NeuroVault ----
-        types.Tool(
-            name="search_neurovault_collections",
-            description=(
-                "Search NeuroVault collections by keyword (matches name, description, authors, "
-                "journal). NOTE: NeuroVault has no server-side search; this MCP maintains a cached "
-                "index built on first ever call (~2–3 min warm-up), persisted to disk so "
-                "subsequent server restarts load instantly."
-            ),
-            inputSchema=_schema(SearchNeuroVaultCollectionsInput),
+        _tool(
+            "search_neurovault_collections",
+            "Search NeuroVault collections by keyword (matches name, description, authors, "
+            "journal). NOTE: NeuroVault has no server-side search; this MCP maintains a cached "
+            "index. First-ever cold build ~2–3 min; subsequent server restarts load from disk in ~100 ms.",
+            SearchNeuroVaultCollectionsInput, NeuroVaultCollectionSearchResult,
         ),
-        types.Tool(
-            name="search_neurovault_images",
-            description=(
-                "Search NeuroVault images by keyword, optionally filtered by `modality` "
-                "(e.g. 'fMRI-BOLD', 'Diffusion MRI') and `map_type` (e.g. 'Z map', 'T map'). "
-                "Looks up images via the parent collections that match the keyword."
-            ),
-            inputSchema=_schema(SearchNeuroVaultImagesInput),
+        _tool(
+            "search_neurovault_images",
+            "Search NeuroVault images by keyword, optionally filtered by `modality` "
+            "(e.g. 'fMRI-BOLD', 'Diffusion MRI') and `map_type` (e.g. 'Z map', 'T map'). "
+            "Looks up images via the parent collections that match the keyword.",
+            SearchNeuroVaultImagesInput, NeuroVaultImageSearchResult,
         ),
-        types.Tool(
-            name="get_neurovault_collection",
-            description="Get a single NeuroVault collection by integer ID.",
-            inputSchema=_schema(GetNeuroVaultCollectionInput),
+        _tool(
+            "get_neurovault_collection",
+            "Get a single NeuroVault collection by integer ID.",
+            GetNeuroVaultCollectionInput, NeuroVaultCollection,
         ),
-        types.Tool(
-            name="get_neurovault_image_metadata",
-            description="Get full metadata for a single NeuroVault image by integer ID.",
-            inputSchema=_schema(GetNeuroVaultImageInput),
+        _tool(
+            "get_neurovault_image_metadata",
+            "Get full metadata for a single NeuroVault image by integer ID.",
+            GetNeuroVaultImageInput, NeuroVaultImage,
         ),
-        types.Tool(
-            name="get_neurovault_collection_publications",
-            description=(
-                "Get the publication metadata associated with a NeuroVault collection: DOI, "
-                "preprint DOI, paper URL, journal, authors."
-            ),
-            inputSchema=_schema(GetNeuroVaultCollectionPublicationsInput),
+        _tool(
+            "get_neurovault_collection_publications",
+            "Get the publication metadata associated with a NeuroVault collection: DOI, "
+            "preprint DOI, paper URL, journal, authors.",
+            GetNeuroVaultCollectionPublicationsInput, NeuroVaultCollectionPublications,
         ),
 
         # ---- Family C: PubMed ----
-        types.Tool(
-            name="search_pubmed",
-            description=(
-                "Search PubMed (NCBI) for biomedical literature by query. Optionally restrict to "
-                "the last N years. Returns total hit count plus full article records (title, "
-                "authors, journal, year, abstract, DOI, MeSH terms)."
-            ),
-            inputSchema=_schema(SearchPubMedInput),
+        _tool(
+            "search_pubmed",
+            "Search PubMed (NCBI) for biomedical literature by query. Optionally restrict to "
+            "the last N years. Returns total hit count plus full article records (title, "
+            "authors, journal, year, abstract in UntrustedText envelope, DOI, MeSH terms). "
+            "Use include_abstracts=false to omit abstracts for lighter responses.",
+            SearchPubMedInput, PubMedSearchResult,
         ),
-        types.Tool(
-            name="get_pubmed_article",
-            description="Fetch a single PubMed article by PMID with full metadata and abstract.",
-            inputSchema=_schema(GetPubMedArticleInput),
+        _tool(
+            "get_pubmed_article",
+            "Fetch a single PubMed article by PMID with full metadata and abstract.",
+            GetPubMedArticleInput, PubMedArticle,
         ),
-        types.Tool(
-            name="get_pubmed_article_abstract",
-            description="Fetch just the title + abstract for a PubMed article by PMID (lightweight).",
-            inputSchema=_schema(GetPubMedAbstractInput),
+        _tool(
+            "get_pubmed_article_abstract",
+            "Fetch just the title + abstract for a PubMed article by PMID (lightweight).",
+            GetPubMedAbstractInput, PubMedAbstract,
         ),
-        types.Tool(
-            name="find_related_pubmed_articles",
-            description=(
-                "Use NCBI's similarity index (elink pubmed_pubmed) to find articles related to "
-                "a given PMID. Returns related PMIDs plus their full article records."
-            ),
-            inputSchema=_schema(FindRelatedPubMedInput),
+        _tool(
+            "find_related_pubmed_articles",
+            "Use NCBI's similarity index (elink pubmed_pubmed) to find articles related to "
+            "a given PMID. Returns related PMIDs plus their full article records.",
+            FindRelatedPubMedInput, PubMedRelatedResult,
         ),
 
         # ---- Family D: Bridge ----
-        types.Tool(
-            name="find_papers_using_dataset",
-            description=(
-                "Cross-source: given an OpenNeuro dataset accession, find PubMed articles that "
-                "are linked to it via DOI. Combines OpenNeuro metadata with PubMed records into "
-                "a unified result."
-            ),
-            inputSchema=_schema(FindPapersUsingDatasetInput),
+        _tool(
+            "find_papers_using_dataset",
+            "Cross-source: given an OpenNeuro dataset accession, find PubMed articles linked "
+            "via DOI. Returns CrossSourceResult with linkage_evidence labels for each match.",
+            FindPapersUsingDatasetInput, CrossSourceResult,
         ),
-        types.Tool(
-            name="find_neurovault_maps_for_paper",
-            description=(
-                "Cross-source: given a PubMed PMID, find NeuroVault collections that link to the "
-                "paper's DOI (statistical maps published alongside the paper)."
-            ),
-            inputSchema=_schema(FindNeuroVaultMapsForPaperInput),
+        _tool(
+            "find_neurovault_maps_for_paper",
+            "Cross-source: given a PubMed PMID, find NeuroVault collections that link to the "
+            "paper's DOI (statistical maps published alongside the paper). DOIs are normalized.",
+            FindNeuroVaultMapsForPaperInput, CrossSourceResult,
         ),
-        types.Tool(
-            name="find_datasets_for_topic",
-            description=(
-                "Cross-source: search both OpenNeuro and NeuroVault in parallel for a research "
-                "topic. Useful when you want raw data AND derived maps for the same question."
-            ),
-            inputSchema=_schema(FindDatasetsForTopicInput),
+        _tool(
+            "find_datasets_for_topic",
+            "Cross-source: parallel keyword search across OpenNeuro and NeuroVault. "
+            "Results are labeled `keyword_match` in linkage_evidence — these are leads, "
+            "not confirmed links. Use the find_papers_using_dataset and "
+            "find_neurovault_maps_for_paper tools to confirm via DOI.",
+            FindDatasetsForTopicInput, CrossSourceResult,
         ),
-        types.Tool(
-            name="comprehensive_literature_search",
-            description=(
-                "Cross-source omnibus: PubMed search → extract MeSH terms from top papers → "
-                "search OpenNeuro and NeuroVault in parallel with the same question → return a "
-                "unified result with suggested follow-up tool calls."
-            ),
-            inputSchema=_schema(ComprehensiveLiteratureSearchInput),
+        _tool(
+            "comprehensive_literature_search",
+            "Cross-source omnibus: PubMed search → extract MeSH terms → topic-search OpenNeuro "
+            "and NeuroVault → also resolve top PubMed paper DOIs to NeuroVault collections. "
+            "Merged results carry linkage_evidence labels distinguishing DOI-confirmed links "
+            "from keyword leads.",
+            ComprehensiveLiteratureSearchInput, CrossSourceResult,
         ),
     ]
 
 
-def _ok(model: BaseModel) -> list[types.TextContent]:
-    return [types.TextContent(type="text", text=model.model_dump_json(indent=2))]
+def _ok_result(model: BaseModel) -> types.CallToolResult:
+    structured = model.model_dump(mode="json")
+    text_body = model.model_dump_json(indent=2)
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=text_body)],
+        structuredContent=structured,
+        isError=False,
+    )
 
 
-def _err(err: ToolError) -> list[types.TextContent]:
-    return [types.TextContent(type="text", text=err.model_dump_json(indent=2))]
+def _err_result(err: ToolError) -> types.CallToolResult:
+    structured = err.model_dump(mode="json")
+    text_body = err.model_dump_json(indent=2)
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=text_body)],
+        structuredContent=structured,
+        isError=True,
+    )
 
 
-# A dispatch table keeps the call_tool body small and testable.
 async def _dispatch(name: str, arguments: dict[str, Any]) -> BaseModel:
     if name == "search_openneuro_datasets":
         return await openneuro_tools.search_openneuro_datasets(
@@ -301,18 +329,18 @@ async def _dispatch(name: str, arguments: dict[str, Any]) -> BaseModel:
 
 
 @server.call_tool()
-async def _call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
+async def _call_tool(name: str, arguments: dict[str, Any]) -> types.CallToolResult:
     try:
         result = await _dispatch(name, arguments)
-        return _ok(result)
+        return _ok_result(result)
     except ValidationError as exc:
-        return _err(ToolError(
+        return _err_result(ToolError(
             error_type="bad_input",
             human_readable_message=f"Input validation failed: {exc}",
             suggested_action="Check the tool's inputSchema and re-issue.",
         ))
-    except Exception as exc:  # noqa: BLE001 — convert every exception to ToolError
-        return _err(classify_exception(exc))
+    except Exception as exc:  # noqa: BLE001
+        return _err_result(classify_exception(exc))
 
 
 async def _run() -> None:
