@@ -126,7 +126,7 @@ More worked examples in [`docs/EXAMPLES.md`](docs/EXAMPLES.md).
 - **Per-client rate limiting** — token bucket: 10 req/sec on OpenNeuro / NeuroVault, 3 req/sec on PubMed (lifted to 9 req/sec with `PUBMED_API_KEY`).
 - **Tenacity retries** — 3 attempts, exp backoff (1–30 s), only on 5xx + transport errors. 4xx propagates as structured ToolError.
 - **TTL cache** — `cachetools.TTLCache` wrapped with per-key asyncio lock to collapse thundering-herd misses to one upstream call. Default 1 h TTL.
-- **NeuroVault collection index** — NeuroVault has zero server-side search; we paginate the full collection list once (~30–60 s, concurrency 8), project to a small dict, and cache for 24 h. All keyword and DOI lookups query the index in-memory.
+- **NeuroVault collection index** — NeuroVault has zero server-side search; we paginate the full collection list once (first ever run ~2–3 min, restarts instant via disk cache), project to a small dict, and cache for 24 h. All keyword and DOI lookups query the index in-memory.
 - **Structured errors** — exceptions never propagate to the MCP client. They're classified into a `ToolError` Pydantic model with `error_type`, human message, upstream status code, and suggested action.
 
 Full design rationale in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Per-source quirks documented in [`docs/API_NOTES.md`](docs/API_NOTES.md).
@@ -138,6 +138,15 @@ pip install -e ".[dev]"
 pytest tests/                       # 22 unit tests, mocked HTTP, < 5s
 pytest tests/ -m integration        # opt-in live API hits (none in this suite by default)
 ```
+
+## Security notes
+
+- **Transport: stdio only.** The server speaks MCP over stdin/stdout to a single local client. It does not bind a network port.
+- **Outbound network egress** to three hosts: `openneuro.org`, `neurovault.org`, `eutils.ncbi.nlm.nih.gov`. If you run this in a restricted environment, allowlist those.
+- **Upstream text is untrusted.** PubMed abstracts, OpenNeuro READMEs, and NeuroVault descriptions are user-supplied. They can contain prompt-injection payloads. We can't semantically sanitize them, so we **truncate** every free-text field to a hard cap (4 KB), tag every response that carries them with an `untrusted_text_warning`, and surface evidence-strength labels on bridge tools so an agent can distinguish "this paper exactly matches the dataset DOI" from "this came up on keyword". Treat all such fields as data, never as instructions.
+- **Inputs are validated strictly.** All tool inputs use Pydantic `extra="forbid"` with length caps, regex constraints on PMIDs / accessions / DOIs, and enums on modality fields. Unknown fields raise instead of being silently dropped.
+- **No persistent secrets.** The only credential the server accepts is `PUBMED_API_KEY` (optional, raises PubMed rate limit). Both that and `PUBMED_EMAIL` live in `.env` (gitignored).
+- **Disk cache.** A NeuroVault collection index (~3 MB, no user data) is written to your OS cache directory to make server restarts fast. Delete that file to invalidate.
 
 ## Provenance
 

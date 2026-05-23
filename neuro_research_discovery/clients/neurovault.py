@@ -6,14 +6,21 @@ are the only thing it honors. So *all* keyword/DOI/modality filtering happens
 client-side, and we maintain an in-memory index of collection projections to
 make this fast.
 
-The collection index is paginated once with concurrency=4 then cached for
-NEUROVAULT_INDEX_TTL seconds (default 24 h). On first call this takes a few
-seconds; subsequent calls are sub-millisecond.
+Index lifecycle (Tier 2 upgrade):
+- On first request, try to load a previously persisted index from disk.
+  - Fresh (< TTL): serve immediately, skip rebuild.
+  - Stale but serveable (< 2x TTL): serve immediately, kick off background refresh.
+  - Older or missing: build synchronously now.
+- A successful build is persisted to disk so the next process start is fast.
+- During a build, per-page failures are tolerated: we keep the projections from
+  successful pages and mark the index as `partial=True`. Tool layer surfaces
+  this on the response.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import Any
 
@@ -21,14 +28,22 @@ import httpx
 
 from .. import settings
 from ..cache import AsyncTTLCache
+from ..disk_cache import (
+    is_fresh,
+    is_serveable,
+    load_neurovault_index,
+    save_neurovault_index,
+)
 from ..rate_limit import AsyncTokenBucket
 from ..retry import upstream_retry
 
 PAGE_SIZE = 500
 # Each page is ~1.5 MB and takes ~7 s end-to-end. Concurrency 8 gets the cold
-# index build to ~30–60 s; concurrency higher than that hits diminishing returns
-# (server-side query time dominates) and risks tripping unannounced rate limits.
+# index build to ~30–60 s; higher hits diminishing returns and risks tripping
+# unannounced rate limits.
 INDEX_CONCURRENCY = 8
+
+_logger = logging.getLogger("neuro_research_discovery.clients.neurovault")
 
 
 class NeuroVaultClient:
@@ -49,8 +64,12 @@ class NeuroVaultClient:
         self._index: list[dict[str, Any]] | None = None
         self._index_built_at: float = 0.0
         self._index_lock = asyncio.Lock()
+        self._refresh_task: asyncio.Task | None = None
+        self.index_partial: bool = False
 
     async def aclose(self) -> None:
+        if self._refresh_task and not self._refresh_task.done():
+            self._refresh_task.cancel()
         await self._http.aclose()
 
     # ---- low-level GET ----
@@ -79,7 +98,6 @@ class NeuroVaultClient:
         )
 
     async def list_collection_images(self, collection_id: int, max_results: int = 100) -> list[dict[str, Any]]:
-        """Returns up to max_results images for a collection (paginated server-side)."""
         key = f"coll_imgs::{collection_id}::{max_results}"
         return await self._object_cache.get_or_set(
             key, lambda: self._list_collection_images_uncached(collection_id, max_results)
@@ -95,52 +113,121 @@ class NeuroVaultClient:
             page = await self._get(url, params=params)
             gathered.extend(page.get("results") or [])
             url = page.get("next")
-            params = None  # `next` is absolute and already includes pagination
+            params = None
         return gathered[:max_results]
 
-    # ---- collection index (client-side search) ----
+    # ---- collection index ----
 
     async def get_index(self, force_refresh: bool = False) -> list[dict[str, Any]]:
-        """Returns the projection index of every collection: id, name, description,
-        DOI, preprint_DOI, authors, journal_name, number_of_images, paper_url, url.
+        """Return the projection index of every collection.
 
-        Cached for NEUROVAULT_INDEX_TTL seconds.
+        Lookup order:
+        1. In-process memory (fresh): serve.
+        2. Disk cache (fresh): load, store in memory, serve.
+        3. Disk cache (stale but serveable): serve stale; schedule background refresh.
+        4. Otherwise: build synchronously and persist.
+
+        With `force_refresh=True`, skip cache lookups and rebuild now.
         """
-        now = time.monotonic()
-        async with self._index_lock:
-            if (
-                not force_refresh
-                and self._index is not None
-                and (now - self._index_built_at) < settings.NEUROVAULT_INDEX_TTL
-            ):
+        if not force_refresh:
+            # 1. In-process
+            if self._index is not None and self._index_age() < settings.NEUROVAULT_INDEX_TTL:
                 return self._index
-            self._index = await self._build_index()
+            # 2 + 3. Disk
+            entry = load_neurovault_index()
+            if entry:
+                self._index = entry["projections"]
+                self._index_built_at = float(entry.get("built_at") or 0.0)
+                self.index_partial = bool(entry.get("partial", False))
+                if is_fresh(entry):
+                    return self._index
+                if is_serveable(entry):
+                    self._schedule_background_refresh()
+                    return self._index
+                # Stale beyond 2x TTL → fall through to sync rebuild.
+
+        async with self._index_lock:
+            # Recheck once we hold the lock; another caller may have built it.
+            if not force_refresh and self._index is not None and self._index_age() < settings.NEUROVAULT_INDEX_TTL:
+                return self._index
+            projections, partial = await self._build_index()
+            self._index = projections
             self._index_built_at = time.monotonic()
+            self.index_partial = partial
+            save_neurovault_index(projections, settings.NEUROVAULT_INDEX_TTL, partial)
             return self._index
 
-    async def _build_index(self) -> list[dict[str, Any]]:
-        # Step 1: fetch page 1 to learn count.
-        first = await self._get("collections/", params={"limit": PAGE_SIZE, "offset": 0})
-        count = int(first.get("count") or 0)
-        projections: list[dict[str, Any]] = [_project_collection(r) for r in first.get("results") or []]
-        if count <= PAGE_SIZE:
-            return projections
+    def _index_age(self) -> float:
+        # Monotonic-relative age; used for in-process freshness only. Disk
+        # freshness uses wall-clock built_at.
+        if self._index_built_at == 0.0:
+            return float("inf")
+        return time.monotonic() - self._index_built_at
 
-        # Step 2: fan out remaining pages with bounded concurrency.
+    def _schedule_background_refresh(self) -> None:
+        """Kick off a non-blocking refresh if one isn't already running."""
+        if self._refresh_task and not self._refresh_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # no running loop; serve stale and let next call retry
+        self._refresh_task = loop.create_task(self._background_refresh())
+
+    async def _background_refresh(self) -> None:
+        try:
+            projections, partial = await self._build_index()
+            async with self._index_lock:
+                self._index = projections
+                self._index_built_at = time.monotonic()
+                self.index_partial = partial
+            save_neurovault_index(projections, settings.NEUROVAULT_INDEX_TTL, partial)
+            _logger.info("NeuroVault index refreshed in background (%d collections, partial=%s)",
+                         len(projections), partial)
+        except Exception as exc:  # noqa: BLE001 — background; never propagate
+            _logger.warning("Background NeuroVault index refresh failed: %s", exc)
+
+    async def _build_index(self) -> tuple[list[dict[str, Any]], bool]:
+        """Returns (projections, partial)."""
+        # Step 1: first page tells us the total count.
+        try:
+            first = await self._get("collections/", params={"limit": PAGE_SIZE, "offset": 0})
+        except Exception as exc:
+            _logger.warning("NeuroVault index build: first-page fetch failed: %s", exc)
+            return [], True
+
+        count = int(first.get("count") or 0)
+        projections: list[dict[str, Any]] = [
+            _project_collection(r) for r in first.get("results") or []
+        ]
+        if count <= PAGE_SIZE:
+            return projections, False
+
+        # Step 2: fan out remaining pages with bounded concurrency. Per-page
+        # failures are caught — we keep what we got and flag partial.
         offsets = list(range(PAGE_SIZE, count, PAGE_SIZE))
         sem = asyncio.Semaphore(INDEX_CONCURRENCY)
+        partial = False
 
         async def fetch_page(offset: int) -> list[dict[str, Any]]:
+            nonlocal partial
             async with sem:
-                page = await self._get(
-                    "collections/", params={"limit": PAGE_SIZE, "offset": offset}
-                )
-                return [_project_collection(r) for r in page.get("results") or []]
+                try:
+                    page = await self._get(
+                        "collections/", params={"limit": PAGE_SIZE, "offset": offset}
+                    )
+                    return [_project_collection(r) for r in page.get("results") or []]
+                except Exception as exc:  # noqa: BLE001
+                    partial = True
+                    _logger.warning(
+                        "NeuroVault index page offset=%d failed: %s", offset, exc
+                    )
+                    return []
 
         page_results = await asyncio.gather(*[fetch_page(o) for o in offsets])
         for page_projs in page_results:
             projections.extend(page_projs)
-        return projections
+        return projections, partial
 
 
 def _project_collection(c: dict[str, Any]) -> dict[str, Any]:

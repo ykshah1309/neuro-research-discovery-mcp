@@ -162,3 +162,15 @@ def fake_entrez(monkeypatch: pytest.MonkeyPatch) -> FakeEntrez:
     monkeypatch.setattr(Entrez, "efetch", fake.efetch)
     monkeypatch.setattr(Entrez, "elink", fake.elink)
     return fake
+
+
+@pytest.fixture(autouse=True)
+def _bypass_neurovault_disk_cache(monkeypatch: pytest.MonkeyPatch):
+    """Always disable the on-disk NeuroVault index cache for unit tests.
+
+    Without this, tests that exercise the NeuroVault client will pick up an
+    index persisted by earlier live runs and never invoke the mocked HTTP.
+    """
+    from neuro_research_discovery.clients import neurovault as nv_module
+    monkeypatch.setattr(nv_module, "load_neurovault_index", lambda: None)
+    monkeypatch.setattr(nv_module, "save_neurovault_index", lambda *a, **kw: None)

@@ -25,14 +25,16 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Medical Science Apps.",
 ]
 dependencies = [
-    "mcp>=1.0.0",
-    "httpx>=0.25.0",
-    "pydantic>=2.0.0",
-    "gql>=3.5.0",
-    "biopython>=1.83",
-    "tenacity>=8.2.0",
-    "python-dotenv>=1.0.0",
-    "cachetools>=5.3.0",
+    # Upper bounds pin major versions so a transitive update can't silently
+    # break the API contract. Bump after testing.
+    "mcp>=1.0.0,<2.0.0",
+    "httpx>=0.25.0,<1.0.0",
+    "pydantic>=2.0.0,<3.0.0",
+    "gql>=3.5.0,<5.0.0",
+    "biopython>=1.83,<2.0",
+    "tenacity>=8.2.0,<10.0.0",
+    "python-dotenv>=1.0.0,<2.0.0",
+    "cachetools>=5.3.0,<8.0.0",
 ]
 
 [project.optional-dependencies]

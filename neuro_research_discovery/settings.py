@@ -2,15 +2,26 @@
 
 from __future__ import annotations
 
+import logging
 import os
 
 from dotenv import load_dotenv
 
 load_dotenv(override=False)
 
+_logger = logging.getLogger("neuro_research_discovery.settings")
+
 PUBMED_API_KEY: str | None = os.environ.get("PUBMED_API_KEY") or None
-PUBMED_EMAIL: str = os.environ.get("PUBMED_EMAIL") or "neuro-research-discovery-mcp@example.com"
+_PLACEHOLDER_EMAIL = "neuro-research-discovery-mcp@example.com"
+PUBMED_EMAIL: str = os.environ.get("PUBMED_EMAIL") or _PLACEHOLDER_EMAIL
 PUBMED_TOOL: str = "neuro-research-discovery-mcp"
+
+if PUBMED_EMAIL == _PLACEHOLDER_EMAIL:
+    _logger.warning(
+        "PUBMED_EMAIL is not set. NCBI requires identification on every Entrez "
+        "request and may rate-limit or block traffic with a placeholder email. "
+        "Set PUBMED_EMAIL=<your.email@institution.tld> in your environment or .env."
+    )
 
 # Rate limit (requests per second) per upstream. PubMed depends on api key presence.
 PUBMED_RATE_PER_SEC: float = 9.0 if PUBMED_API_KEY else 2.5  # leave headroom under 10 / 3

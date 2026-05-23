@@ -4,10 +4,14 @@ Each function takes a Pydantic input model and returns a Pydantic output model.
 Field extraction lives here because the GraphQL shape is awkward (modalities and
 subjects/tasks live in `latestSnapshot.summary`, the canonical title is in
 `latestSnapshot.description.Name`, DOIs are scattered across three locations).
+
+All upstream-supplied text is run through text_safety.truncate() to bound the
+size of any single response — see UPGRADE_PLAN.md Tier 1b.
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from ..clients.openneuro import OpenNeuroClient
@@ -23,6 +27,12 @@ from ..models import (
     OpenNeuroSearchResult,
     SearchOpenNeuroInput,
 )
+from ..text_safety import (
+    MAX_FILES_PER_LISTING,
+    cap_list,
+    truncate,
+    truncate_title,
+)
 
 
 def _summary(node: dict[str, Any]) -> OpenNeuroDatasetSummary:
@@ -31,7 +41,7 @@ def _summary(node: dict[str, Any]) -> OpenNeuroDatasetSummary:
     summary = snap.get("summary") or {}
     return OpenNeuroDatasetSummary(
         accession_number=node.get("id", ""),
-        title=desc.get("Name") or "",
+        title=truncate_title(desc.get("Name") or ""),
         modalities=list(summary.get("modalities") or []),
         num_subjects=len(summary.get("subjects") or []),
         tasks=list(summary.get("tasks") or []),
@@ -39,7 +49,6 @@ def _summary(node: dict[str, Any]) -> OpenNeuroDatasetSummary:
 
 
 def _download_url(accession: str) -> str:
-    # OpenNeuro snapshot download via S3 mirror; this is the user-facing landing page.
     return f"https://openneuro.org/datasets/{accession}/download"
 
 
@@ -60,7 +69,12 @@ def _collect_dois(dataset: dict[str, Any]) -> list[str]:
         metadata.get("openneuroPaperDOI"),
     ):
         if candidate and isinstance(candidate, str) and "/" in candidate and " " not in candidate:
-            cleaned = candidate.strip().removeprefix("https://doi.org/").removeprefix("http://doi.org/").removeprefix("doi:")
+            cleaned = (
+                candidate.strip()
+                .removeprefix("https://doi.org/")
+                .removeprefix("http://doi.org/")
+                .removeprefix("doi:")
+            )
             if cleaned and cleaned not in found:
                 found.append(cleaned)
     return found
@@ -92,14 +106,13 @@ async def get_openneuro_dataset(
     summary = snap.get("summary") or {}
     metadata = ds.get("metadata") or {}
 
-    # Description: prefer the README first line(s); fall back to studyDomain or empty.
     readme = (snap.get("readme") or "").strip()
-    description = readme[:500] if readme else (metadata.get("studyDomain") or "")
+    description = readme if readme else (metadata.get("studyDomain") or "")
 
     return OpenNeuroDataset(
         accession_number=ds.get("id", params.accession_number),
-        title=desc.get("Name") or ds.get("name", ""),
-        description=description,
+        title=truncate_title(desc.get("Name") or ds.get("name", "")),
+        description=truncate(description),
         modalities=list(summary.get("modalities") or []),
         num_subjects=len(summary.get("subjects") or []),
         num_sessions=len(summary.get("sessions") or []),
@@ -120,32 +133,65 @@ async def list_openneuro_dataset_files(
 
     files: list[OpenNeuroFile] = []
     if params.modality:
-        # Descend one level into per-subject dirs that contain the requested modality.
-        for entry in root_files:
-            if entry.get("directory") and entry.get("filename", "").startswith("sub-"):
-                sub_files = await client.list_files(
-                    params.accession_number, tag, tree=entry.get("id")
-                )
-                for s in sub_files:
-                    name = s.get("filename") or ""
-                    if name == params.modality or name.startswith(params.modality + "/"):
-                        if s.get("directory"):
-                            # Descend one more level to actually list the data files.
-                            inner = await client.list_files(
-                                params.accession_number, tag, tree=s.get("id")
-                            )
-                            files.extend(_to_file_models(inner))
-                        else:
-                            files.append(_to_file_model(s))
+        files = await _walk_modality(client, params.accession_number, tag, root_files, params.modality)
     else:
         files = _to_file_models(root_files)
 
+    capped, was_truncated = cap_list(files, max_items=MAX_FILES_PER_LISTING)
     return OpenNeuroFileListing(
         accession_number=params.accession_number,
         snapshot_tag=tag,
         modality_filter=params.modality,
-        files=files,
+        files=capped,
+        truncated=was_truncated,
+        truncation_note=(
+            f"Listing truncated at {MAX_FILES_PER_LISTING} files; dataset has more. "
+            "Use a more specific modality filter or fetch by file path directly."
+            if was_truncated else None
+        ),
     )
+
+
+async def _walk_modality(
+    client: OpenNeuroClient,
+    accession: str,
+    tag: str,
+    root_files: list[dict[str, Any]],
+    modality: str,
+) -> list[OpenNeuroFile]:
+    """Descend into per-subject modality directories, in parallel.
+
+    Bounded concurrency keeps us within the OpenNeuro rate budget (10/sec)
+    while cutting wall time on large datasets significantly.
+    """
+    subject_dirs = [
+        e for e in root_files
+        if e.get("directory") and (e.get("filename") or "").startswith("sub-")
+    ]
+    sem = asyncio.Semaphore(4)
+
+    async def for_subject(sub: dict[str, Any]) -> list[OpenNeuroFile]:
+        async with sem:
+            sub_files = await client.list_files(accession, tag, tree=sub.get("id"))
+        out: list[OpenNeuroFile] = []
+        for s in sub_files:
+            name = s.get("filename") or ""
+            if name == modality or name.startswith(modality + "/"):
+                if s.get("directory"):
+                    async with sem:
+                        inner = await client.list_files(accession, tag, tree=s.get("id"))
+                    out.extend(_to_file_models(inner))
+                else:
+                    out.append(_to_file_model(s))
+        return out
+
+    batches = await asyncio.gather(*[for_subject(s) for s in subject_dirs])
+    flat: list[OpenNeuroFile] = []
+    for b in batches:
+        flat.extend(b)
+        if len(flat) >= MAX_FILES_PER_LISTING:
+            return flat
+    return flat
 
 
 def _to_file_model(entry: dict[str, Any]) -> OpenNeuroFile:

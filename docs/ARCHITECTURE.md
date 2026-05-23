@@ -49,7 +49,7 @@ Stacking order inside each client method: rate limit → retry → cache. That i
 
 NeuroVault's REST API silently ignores every querystring filter — `?search=`, `?DOI=`, `?modality=`, all of them. The only honored params are `limit` and `offset`. This is documented in `docs/API_NOTES.md`. The practical consequence: we maintain a **collection index** in memory.
 
-The index is a projection (id, name, description, DOI, preprint_DOI, authors, journal_name, number_of_images, paper_url, download_url) for all ~17,000 collections. It's built once by concurrent pagination (8 workers, 500/page), then cached for `NEUROVAULT_INDEX_TTL` (default 24 h). On a cold cache the first call takes ~30–60 s (each page is ~1.5 MB / 7 s end-to-end); subsequent calls are sub-millisecond.
+The index is a projection (id, name, description, DOI, preprint_DOI, authors, journal_name, number_of_images, paper_url, download_url) for all ~17,000 collections. It's built once by concurrent pagination (8 workers, 500/page), then cached in memory **and persisted to disk** at `~/.cache/neuro-research-discovery-mcp/neurovault_index.json` (or `%LOCALAPPDATA%\neuro-research-discovery-mcp\` on Windows). On a truly cold cache (no disk file) the first call takes ~2–3 min (each page is ~1.5 MB / 7 s end-to-end; we observed 168 s in production). Subsequent server restarts load from disk in ~100 ms. After the in-memory TTL expires, stale-while-revalidate kicks in: callers get instant stale results while a background refresh runs.
 
 All keyword and DOI lookups query the index in-memory. Image search restricts to images of collections that match the keyword (capped at 10 collections to bound fan-out), then filters by `modality` and `map_type` client-side.
 

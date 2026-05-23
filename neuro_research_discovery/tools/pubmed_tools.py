@@ -1,4 +1,8 @@
-"""Family C — PubMed tools."""
+"""Family C — PubMed tools.
+
+All upstream text (title, abstract, authors) is truncated to bound response
+size — see UPGRADE_PLAN.md Tier 1b.
+"""
 
 from __future__ import annotations
 
@@ -13,10 +17,21 @@ from ..models import (
     PubMedSearchResult,
     SearchPubMedInput,
 )
+from ..text_safety import truncate, truncate_title
 
 
-def _article(record: dict) -> PubMedArticle:
-    return PubMedArticle(**record)
+def _article(record: dict, include_abstract: bool = True) -> PubMedArticle:
+    return PubMedArticle(
+        pmid=record["pmid"],
+        title=truncate_title(record.get("title") or ""),
+        authors=record.get("authors") or [],
+        journal=record.get("journal") or "",
+        year=record.get("year"),
+        abstract=truncate(record.get("abstract") or "") if include_abstract else "",
+        doi=record.get("doi"),
+        keywords=record.get("keywords") or [],
+        mesh_terms=record.get("mesh_terms") or [],
+    )
 
 
 async def search_pubmed(
@@ -28,7 +43,8 @@ async def search_pubmed(
         date_range_years=params.date_range_years,
     )
     pmids = search["ids"]
-    articles = [_article(r) for r in await client.efetch_articles(pmids)] if pmids else []
+    raw = await client.efetch_articles(pmids) if pmids else []
+    articles = [_article(r, include_abstract=params.include_abstracts) for r in raw]
     return PubMedSearchResult(
         query=params.query,
         total_hits=search["count"],
@@ -54,7 +70,11 @@ async def get_pubmed_article_abstract(
     if not records:
         raise ValueError(f"PMID not found: {params.pmid}")
     r = records[0]
-    return PubMedAbstract(pmid=r["pmid"], title=r["title"], abstract=r["abstract"])
+    return PubMedAbstract(
+        pmid=r["pmid"],
+        title=truncate_title(r.get("title") or ""),
+        abstract=truncate(r.get("abstract") or ""),
+    )
 
 
 async def find_related_pubmed_articles(

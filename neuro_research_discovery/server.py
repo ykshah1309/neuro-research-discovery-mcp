@@ -123,7 +123,8 @@ async def _list_tools() -> list[types.Tool]:
             description=(
                 "Search NeuroVault collections by keyword (matches name, description, authors, "
                 "journal). NOTE: NeuroVault has no server-side search; this MCP maintains a cached "
-                "index built on first call (~30–60s warm-up, sub-millisecond thereafter)."
+                "index built on first ever call (~2–3 min warm-up), persisted to disk so "
+                "subsequent server restarts load instantly."
             ),
             inputSchema=_schema(SearchNeuroVaultCollectionsInput),
         ),

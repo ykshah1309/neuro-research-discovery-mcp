@@ -22,6 +22,7 @@ from ..models import (
     SearchNeuroVaultCollectionsInput,
     SearchNeuroVaultImagesInput,
 )
+from ..text_safety import truncate, truncate_authors, truncate_title
 
 # Number of matching collections we'll expand into image results before stopping.
 # Caps fan-out for search_neurovault_images.
@@ -41,11 +42,11 @@ def _collection_from_projection(p: dict[str, Any]) -> NeuroVaultCollection:
     cid = int(p.get("id") or 0)
     return NeuroVaultCollection(
         collection_id=cid,
-        name=p.get("name") or "",
-        description=p.get("description") or "",
+        name=truncate_title(p.get("name") or ""),
+        description=truncate(p.get("description") or ""),
         doi=p.get("DOI") or None,
         preprint_doi=p.get("preprint_DOI") or None,
-        authors=p.get("authors"),
+        authors=truncate_authors(p.get("authors")),
         journal_name=p.get("journal_name"),
         paper_url=p.get("paper_url"),
         num_images=int(p.get("number_of_images") or 0),
@@ -57,11 +58,11 @@ def _collection_from_full(c: dict[str, Any]) -> NeuroVaultCollection:
     cid = int(c.get("id") or 0)
     return NeuroVaultCollection(
         collection_id=cid,
-        name=c.get("name") or "",
-        description=c.get("description") or "",
+        name=truncate_title(c.get("name") or ""),
+        description=truncate(c.get("description") or ""),
         doi=c.get("DOI"),
         preprint_doi=c.get("preprint_DOI"),
-        authors=c.get("authors"),
+        authors=truncate_authors(c.get("authors")),
         journal_name=c.get("journal_name"),
         paper_url=c.get("paper_url"),
         num_images=int(c.get("number_of_images") or 0),
@@ -72,7 +73,7 @@ def _collection_from_full(c: dict[str, Any]) -> NeuroVaultCollection:
 def _image_model(i: dict[str, Any]) -> NeuroVaultImage:
     return NeuroVaultImage(
         image_id=int(i.get("id") or 0),
-        name=i.get("name") or "",
+        name=truncate_title(i.get("name") or ""),
         map_type=i.get("map_type"),
         modality=i.get("modality"),
         collection_id=int(i.get("collection_id") or 0),
@@ -89,12 +90,18 @@ async def search_neurovault_collections(
     params: SearchNeuroVaultCollectionsInput, client: NeuroVaultClient
 ) -> NeuroVaultCollectionSearchResult:
     index = await client.get_index()
+    partial = bool(getattr(client, "index_partial", False))
     terms = [t for t in params.query.lower().split() if t]
     matches = [p for p in index if _matches(p, terms)][: params.max_results]
     return NeuroVaultCollectionSearchResult(
         query=params.query,
         total_returned=len(matches),
         collections=[_collection_from_projection(p) for p in matches],
+        index_partial=partial,
+        index_note=(
+            "Collection index was built from a partial scan (some pages failed); "
+            "results may be incomplete." if partial else None
+        ),
     )
 
 

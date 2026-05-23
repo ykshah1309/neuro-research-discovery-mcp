@@ -32,7 +32,7 @@ several places.
 ### Things that bit us
 
 - **All query string filters are silently ignored.** `?search=`, `?DOI=`, `?DOI__iexact=`, `?modality=`, `?map_type=` — all return the unfiltered list with `count = 17333` (the total collection count). The only honored params are `limit` (capped at 500) and `offset`.
-- **Consequence:** all keyword/DOI/modality filtering must be client-side. We build an in-memory collection index (~17k records, ~30–60 s cold build with concurrency 8 — each page is ~1.5 MB / 7 s round-trip — 24 h TTL) and filter there.
+- **Consequence:** all keyword/DOI/modality filtering must be client-side. We build an in-memory collection index (~17k records, **~2–3 min** cold build with concurrency 8 — each page is ~1.5 MB / 7 s round-trip — 24 h TTL). The index is persisted to disk so restarts skip the build entirely (~100 ms load). See `disk_cache.py`.
 - **DOI casing:** field is `DOI` (uppercase) on collections. There's also `preprint_DOI`. Both are often `null`. Compare case-insensitively and check both fields.
 - **Sparse image IDs.** `/api/images/1/` → 404. Don't iterate IDs; iterate pages or descend from `collection.images`.
 - **No publications endpoint.** `/api/publications/` 404s. Publication metadata lives directly on the collection object: `DOI`, `preprint_DOI`, `authors`, `paper_url`, `journal_name`.

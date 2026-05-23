@@ -95,7 +95,7 @@ Look at `num_subjects` and `tasks` to pick the most useful one. Combine with `ni
 { "tool": "search_neurovault_collections", "input": { "query": "Stroop", "max_results": 10 } }
 ```
 
-First call on a cold cache takes ~30–60 s while the collection index builds (each page of 500 collections is ~1.5 MB; 35 pages total). Subsequent calls within 24 h are sub-millisecond.
+First ever call on a brand-new install takes ~2–3 min while the 17,000-collection index builds and persists to disk. After that, all subsequent calls (including across server restarts) are near-instant.
 
 For each interesting collection:
 

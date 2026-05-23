@@ -189,6 +189,61 @@ async def test_find_neurovault_maps_for_paper_matches_doi(fake_entrez: FakeEntre
 
 
 @pytest.mark.asyncio
+async def test_find_neurovault_maps_for_paper_emits_doi_exact_evidence(fake_entrez: FakeEntrez):
+    """Bridge tools must label *how* each result is linked to the query."""
+    fake_entrez.efetch_response = make_pubmed_efetch_xml([{
+        "pmid": "7777", "title": "P", "authors": [{"first": "X", "last": "Y"}],
+        "journal": "J", "year": "2024", "abstract": "abs", "doi": "10.99/exact", "mesh": [],
+    }])
+    pubmed = PubMedClient()
+    nv = NeuroVaultClient()
+
+    def handler(req):
+        return httpx.Response(200, json={"count": 1, "next": None, "previous": None, "results": [
+            {"id": 99, "name": "X", "description": "", "DOI": "10.99/EXACT",
+             "preprint_DOI": None, "authors": None, "journal_name": None, "paper_url": None,
+             "number_of_images": 1, "download_url": None},
+        ]})
+
+    patch_httpx_client(nv, handler)
+    try:
+        result = await bridge_tools.find_neurovault_maps_for_paper(
+            FindNeuroVaultMapsForPaperInput(pmid="7777"), pubmed, nv
+        )
+        assert result.linkage_evidence.get("pubmed:7777") == "doi_exact"
+        assert result.linkage_evidence.get("neurovault_collection:99") == "doi_exact"
+    finally:
+        await nv.aclose()
+
+
+@pytest.mark.asyncio
+async def test_neurovault_search_surfaces_partial_index_flag():
+    """When the upstream pagination fails on later pages we should flag partial."""
+    client = NeuroVaultClient()
+    # count says there are 1500 records (3 pages of 500) but page 2 + 3 will 500-error.
+    page1_items = [{"id": i, "name": f"x{i}", "description": "", "DOI": None,
+                    "preprint_DOI": None, "authors": None, "journal_name": None, "paper_url": None,
+                    "number_of_images": 0, "download_url": None} for i in range(500)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        offset = int(req.url.params.get("offset", 0))
+        if offset == 0:
+            return httpx.Response(200, json={"count": 1500, "next": None, "previous": None, "results": page1_items})
+        return httpx.Response(500, json={"error": "kaboom"})
+
+    patch_httpx_client(client, handler)
+    try:
+        from neuro_research_discovery.models import SearchNeuroVaultCollectionsInput as Q
+        result = await neurovault_tools.search_neurovault_collections(
+            Q(query="x42", max_results=5), client
+        )
+        assert result.index_partial is True
+        assert result.index_note and "incomplete" in result.index_note
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_find_papers_using_dataset_chains_doi_lookup(fake_entrez: FakeEntrez):
     # esearch returns PMID 12345; efetch returns one article record.
     fake_entrez.esearch_response = make_esearch_xml(["12345"])
