@@ -192,6 +192,38 @@ class GetNeuroVaultCollectionPublicationsInput(_StrictInput):
     collection_id: int = Field(ge=1, le=10_000_000)
 
 
+class NeuroVaultCacheStatusInput(_StrictInput):
+    pass  # no inputs; reads current state only
+
+
+class PrewarmNeuroVaultIndexInput(_StrictInput):
+    force_refresh: bool = Field(
+        default=False,
+        description="If true, rebuild the index even if it's still fresh.",
+    )
+
+
+class NeuroVaultCacheStatus(BaseModel):
+    status: Literal["fresh", "stale_but_serveable", "expired", "missing"]
+    in_memory_loaded: bool
+    on_disk_present: bool
+    age_seconds: int | None
+    ttl_seconds: int
+    collection_count: int | None
+    partial: bool
+    size_bytes: int | None
+    schema_version: int | None
+    notes: str
+
+
+class PrewarmReport(BaseModel):
+    action: Literal["already_fresh_skipped", "rebuilt", "rebuild_failed"]
+    elapsed_seconds: float
+    collection_count: int
+    partial: bool
+    notes: str
+
+
 class NeuroVaultCollection(BaseModel):
     collection_id: int
     name: str

@@ -9,16 +9,30 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import time
+
+from .. import settings
 from ..clients.neurovault import NeuroVaultClient
+from ..disk_cache import (
+    NEUROVAULT_INDEX_SCHEMA_VERSION,
+    _index_path,
+    is_fresh,
+    is_serveable,
+    load_neurovault_index,
+)
 from ..models import (
     GetNeuroVaultCollectionInput,
     GetNeuroVaultCollectionPublicationsInput,
     GetNeuroVaultImageInput,
+    NeuroVaultCacheStatus,
+    NeuroVaultCacheStatusInput,
     NeuroVaultCollection,
     NeuroVaultCollectionPublications,
     NeuroVaultCollectionSearchResult,
     NeuroVaultImage,
     NeuroVaultImageSearchResult,
+    PrewarmNeuroVaultIndexInput,
+    PrewarmReport,
     SearchNeuroVaultCollectionsInput,
     SearchNeuroVaultImagesInput,
 )
@@ -167,6 +181,118 @@ async def get_neurovault_image_metadata(
 ) -> NeuroVaultImage:
     raw = await client.get_image(params.image_id)
     return _image_model(raw)
+
+
+async def get_neurovault_cache_status(
+    _: NeuroVaultCacheStatusInput, client: NeuroVaultClient
+) -> NeuroVaultCacheStatus:
+    """Report whether the on-disk and in-memory NeuroVault index are warm.
+
+    Inspects on-disk state first (so the answer is correct even right after a
+    fresh process start), then layers in-memory state on top.
+    """
+    in_mem_loaded = getattr(client, "_index", None) is not None
+    partial = bool(getattr(client, "index_partial", False))
+
+    entry = load_neurovault_index()
+    on_disk = entry is not None
+    age_seconds: int | None = None
+    collection_count: int | None = None
+    size_bytes: int | None = None
+    schema_version: int | None = None
+    status: str = "missing"
+    notes_parts: list[str] = []
+
+    if entry is not None:
+        built_at = float(entry.get("built_at") or 0)
+        age_seconds = max(0, int(time.time() - built_at))
+        collection_count = len(entry.get("projections") or [])
+        schema_version = entry.get("schema_version")
+        path = _index_path()
+        if path.is_file():
+            size_bytes = path.stat().st_size
+        if is_fresh(entry):
+            status = "fresh"
+        elif is_serveable(entry):
+            status = "stale_but_serveable"
+            notes_parts.append(
+                "Cache is past TTL but within 2x; stale-while-revalidate is in effect."
+            )
+        else:
+            status = "expired"
+            notes_parts.append("Cache is older than 2x TTL; next call will rebuild.")
+    elif in_mem_loaded:
+        collection_count = len(client._index or [])  # type: ignore[union-attr]
+        status = "fresh"  # in-memory exists; safe to serve
+        notes_parts.append(
+            "In-memory index exists but no disk file is present. Next server restart will rebuild."
+        )
+    else:
+        notes_parts.append(
+            "No NeuroVault index in memory or on disk. First search will trigger a "
+            "~2–3 min cold build. Use prewarm_neurovault_index to do this proactively."
+        )
+
+    if partial:
+        notes_parts.append("Last build was partial — some upstream pages failed.")
+
+    return NeuroVaultCacheStatus(
+        status=status,  # type: ignore[arg-type]
+        in_memory_loaded=in_mem_loaded,
+        on_disk_present=on_disk,
+        age_seconds=age_seconds,
+        ttl_seconds=settings.NEUROVAULT_INDEX_TTL,
+        collection_count=collection_count,
+        partial=partial,
+        size_bytes=size_bytes,
+        schema_version=schema_version,
+        notes=" ".join(notes_parts) if notes_parts else "Cache is healthy.",
+    )
+
+
+async def prewarm_neurovault_index(
+    params: PrewarmNeuroVaultIndexInput, client: NeuroVaultClient
+) -> PrewarmReport:
+    """Trigger an index build if needed (or always with force_refresh=True).
+
+    Use at the start of a research session so the agent doesn't pay the
+    cold-build cost on the first real search. If the cache is already fresh
+    (and force_refresh is false) we return immediately with action='already_fresh_skipped'.
+    """
+    if not params.force_refresh:
+        entry = load_neurovault_index()
+        if entry is not None and is_fresh(entry):
+            return PrewarmReport(
+                action="already_fresh_skipped",
+                elapsed_seconds=0.0,
+                collection_count=len(entry.get("projections") or []),
+                partial=bool(entry.get("partial", False)),
+                notes="Cache is already fresh; nothing to do.",
+            )
+
+    t0 = time.monotonic()
+    try:
+        index = await client.get_index(force_refresh=True)
+        elapsed = time.monotonic() - t0
+        return PrewarmReport(
+            action="rebuilt",
+            elapsed_seconds=round(elapsed, 2),
+            collection_count=len(index),
+            partial=bool(getattr(client, "index_partial", False)),
+            notes=(
+                f"Rebuild completed in {elapsed:.1f}s. Index persisted to disk; "
+                "subsequent restarts will load instantly."
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        elapsed = time.monotonic() - t0
+        return PrewarmReport(
+            action="rebuild_failed",
+            elapsed_seconds=round(elapsed, 2),
+            collection_count=0,
+            partial=True,
+            notes=f"Rebuild failed after {elapsed:.1f}s: {type(exc).__name__}: {exc}",
+        )
 
 
 async def get_neurovault_collection_publications(

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import time
 from typing import Any
 
 import mcp.server.stdio
@@ -44,6 +46,8 @@ from .models import (
     GetPubMedAbstractInput,
     GetPubMedArticleInput,
     ListOpenNeuroDatasetFilesInput,
+    NeuroVaultCacheStatus,
+    NeuroVaultCacheStatusInput,
     NeuroVaultCollection,
     NeuroVaultCollectionPublications,
     NeuroVaultCollectionSearchResult,
@@ -53,6 +57,8 @@ from .models import (
     OpenNeuroFileListing,
     OpenNeuroPublications,
     OpenNeuroSearchResult,
+    PrewarmNeuroVaultIndexInput,
+    PrewarmReport,
     PubMedAbstract,
     PubMedArticle,
     PubMedRelatedResult,
@@ -63,6 +69,16 @@ from .models import (
     SearchPubMedInput,
 )
 from .tools import bridge_tools, neurovault_tools, openneuro_tools, pubmed_tools
+
+# Audit logger emits one JSON-line per tool call. Goes to stderr (which is
+# the MCP-server-side log channel since stdout is the protocol stream).
+audit_log = logging.getLogger("neuro_research_discovery.audit")
+if not audit_log.handlers:
+    _audit_handler = logging.StreamHandler()
+    _audit_handler.setFormatter(logging.Formatter("%(message)s"))
+    audit_log.addHandler(_audit_handler)
+    audit_log.setLevel(logging.INFO)
+    audit_log.propagate = False
 
 server: Server = Server("neuro-research-discovery-mcp")
 
@@ -181,6 +197,22 @@ async def _list_tools() -> list[types.Tool]:
             "preprint DOI, paper URL, journal, authors.",
             GetNeuroVaultCollectionPublicationsInput, NeuroVaultCollectionPublications,
         ),
+        _tool(
+            "get_neurovault_cache_status",
+            "Report the current state of the NeuroVault collection index cache: "
+            "fresh / stale / missing, age in seconds, collection count, on-disk size. "
+            "Use this to decide whether to call prewarm_neurovault_index before a "
+            "research session.",
+            NeuroVaultCacheStatusInput, NeuroVaultCacheStatus,
+        ),
+        _tool(
+            "prewarm_neurovault_index",
+            "Proactively build (or rebuild with force_refresh=true) the NeuroVault "
+            "collection index. First-ever cold build takes ~2–3 minutes; subsequent "
+            "restarts load from disk in ~100 ms. Returns immediately if the cache is "
+            "already fresh.",
+            PrewarmNeuroVaultIndexInput, PrewarmReport,
+        ),
 
         # ---- Family C: PubMed ----
         _tool(
@@ -297,6 +329,14 @@ async def _dispatch(name: str, arguments: dict[str, Any]) -> BaseModel:
         return await neurovault_tools.get_neurovault_collection_publications(
             GetNeuroVaultCollectionPublicationsInput(**arguments), _neurovault()
         )
+    if name == "get_neurovault_cache_status":
+        return await neurovault_tools.get_neurovault_cache_status(
+            NeuroVaultCacheStatusInput(**arguments), _neurovault()
+        )
+    if name == "prewarm_neurovault_index":
+        return await neurovault_tools.prewarm_neurovault_index(
+            PrewarmNeuroVaultIndexInput(**arguments), _neurovault()
+        )
     if name == "search_pubmed":
         return await pubmed_tools.search_pubmed(SearchPubMedInput(**arguments), _pubmed())
     if name == "get_pubmed_article":
@@ -330,17 +370,38 @@ async def _dispatch(name: str, arguments: dict[str, Any]) -> BaseModel:
 
 @server.call_tool()
 async def _call_tool(name: str, arguments: dict[str, Any]) -> types.CallToolResult:
+    t0 = time.monotonic()
+    err_type: str | None = None
+    is_error = False
     try:
-        result = await _dispatch(name, arguments)
+        try:
+            result = await _dispatch(name, arguments)
+        except ValidationError as exc:
+            err_type = "ValidationError"
+            is_error = True
+            return _err_result(ToolError(
+                error_type="bad_input",
+                human_readable_message=f"Input validation failed: {exc}",
+                suggested_action="Check the tool's inputSchema and re-issue.",
+            ))
+        except Exception as exc:  # noqa: BLE001
+            err_type = type(exc).__name__
+            is_error = True
+            return _err_result(classify_exception(exc))
         return _ok_result(result)
-    except ValidationError as exc:
-        return _err_result(ToolError(
-            error_type="bad_input",
-            human_readable_message=f"Input validation failed: {exc}",
-            suggested_action="Check the tool's inputSchema and re-issue.",
-        ))
-    except Exception as exc:  # noqa: BLE001
-        return _err_result(classify_exception(exc))
+    finally:
+        elapsed_ms = round((time.monotonic() - t0) * 1000.0, 1)
+        try:
+            audit_log.info(json.dumps({
+                "ts": round(time.time(), 3),
+                "tool": name,
+                "arg_keys": sorted((arguments or {}).keys()),
+                "elapsed_ms": elapsed_ms,
+                "is_error": is_error,
+                "error_type": err_type,
+            }))
+        except Exception:  # noqa: BLE001 — never let logging break the response
+            pass
 
 
 async def _run() -> None:

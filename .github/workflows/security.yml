@@ -6,8 +6,15 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    # Weekly dep audit so we catch CVEs without depending on PR cadence.
+    # Weekly dep audit + integration check so we catch CVEs and upstream API
+    # regressions without depending on PR cadence.
     - cron: "0 13 * * 1"
+  workflow_dispatch:
+    inputs:
+      run_integration:
+        description: "Also run live integration tests"
+        type: boolean
+        default: false
 
 jobs:
   pip-audit:
@@ -33,7 +40,27 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install with pinned constraints for bit-identical CI
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" -c constraints.txt
+      - name: Unit tests
+        run: pytest tests/ --ignore=tests/test_integration.py -q
+
+  integration:
+    # Opt-in: only runs when a maintainer triggers `workflow_dispatch` with
+    # run_integration=true, OR on the weekly schedule. Live API calls.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
-      - run: pytest tests/ --ignore=tests/test_integration.py -q
+      - name: Live integration tests
+        env:
+          PUBMED_EMAIL: ${{ secrets.PUBMED_EMAIL || 'ci@example.com' }}
+        run: pytest tests/test_integration.py -m integration -q

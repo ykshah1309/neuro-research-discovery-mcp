@@ -71,6 +71,8 @@ Restart Claude Desktop fully (system-tray Quit, then relaunch). The 17 tools wil
 | `get_neurovault_collection` | Get one collection by integer ID |
 | `get_neurovault_image_metadata` | Get one image's metadata by integer ID |
 | `get_neurovault_collection_publications` | DOI + paper URL + journal info for a collection |
+| `get_neurovault_cache_status` | Report whether the on-disk collection index is fresh, stale, or missing |
+| `prewarm_neurovault_index` | Build or refresh the collection index proactively (skipped if already fresh). Call at the start of a session to avoid cold-build latency on the first real search. |
 
 ### Family C — PubMed (literature)
 | Tool | What it does |
@@ -135,9 +137,45 @@ Full design rationale in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Per-sou
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/                       # 22 unit tests, mocked HTTP, < 5s
-pytest tests/ -m integration        # opt-in live API hits (none in this suite by default)
+pytest tests/                       # 87 unit tests, mocked HTTP, ~10s
+pytest tests/ -m integration        # opt-in live API hits
 ```
+
+## Reproducible installs
+
+`pyproject.toml` keeps loose lower-bound + major-version upper-bound pins so the
+library is reusable. For deployments that need bit-identical installs (Docker
+images, Claude Desktop wraparounds, CI runners), pin against the lockfile:
+
+```bash
+pip install -e . -c constraints.txt
+```
+
+Regenerate after a dependency upgrade with:
+
+```bash
+python -m pipdeptree -p neuro-research-discovery-mcp --freeze \
+  | grep -v '^-e' | sort -u > constraints.txt
+```
+
+## Audit logging
+
+Every tool call emits a single JSON line to stderr via the
+`neuro_research_discovery.audit` logger:
+
+```json
+{"ts":1779580487.801,"tool":"search_pubmed","arg_keys":["query","max_results"],"elapsed_ms":541.3,"is_error":false,"error_type":null}
+```
+
+We log **argument keys** but not values to avoid surprising users by writing
+free-text queries to logs. Redirect or capture this stream however your
+deployment expects (file, syslog, Loki).
+
+## Roadmap
+
+[`ROADMAP_v0.4.md`](ROADMAP_v0.4.md) — the next-version accuracy milestone:
+OpenAlex (or Crossref / Semantic Scholar) enrichment to fix the
+"keyword-match only, no DOI bridge" failure mode in topic discovery.
 
 ## Security notes
 

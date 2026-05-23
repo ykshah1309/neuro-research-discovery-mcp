@@ -10,7 +10,8 @@ import neuro_research_discovery.server as srv
 @pytest.mark.asyncio
 async def test_every_tool_has_input_and_output_schema():
     tools = await srv._list_tools()
-    assert len(tools) == 17
+    # 17 core neuro tools + 2 v0.3.1 cache-admin tools = 19
+    assert len(tools) == 19
     for t in tools:
         assert t.inputSchema, f"{t.name} missing inputSchema"
         assert t.outputSchema, f"{t.name} missing outputSchema"
