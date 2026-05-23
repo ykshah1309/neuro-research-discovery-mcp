@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "neuro-research-discovery-mcp"
+version = "0.1.0"
+description = "MCP server bridging OpenNeuro, NeuroVault, and PubMed for AI-agent-driven neuroimaging research discovery."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [
+    { name = "Yash Kamlesh Shah", email = "yash@avarieux.com" }
+]
+keywords = [
+    "mcp", "model-context-protocol", "neuroimaging",
+    "openneuro", "neurovault", "pubmed", "bids", "fmri", "research"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+dependencies = [
+    "mcp>=1.0.0",
+    "httpx>=0.25.0",
+    "pydantic>=2.0.0",
+    "gql>=3.5.0",
+    "biopython>=1.83",
+    "tenacity>=8.2.0",
+    "python-dotenv>=1.0.0",
+    "cachetools>=5.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.23.0",
+    "respx>=0.20.0",
+]
+
+[project.scripts]
+neuro-research-discovery = "neuro_research_discovery.server:main"
+
+[project.urls]
+Homepage = "https://github.com/ykshah1309/neuro-research-discovery-mcp"
+Repository = "https://github.com/ykshah1309/neuro-research-discovery-mcp"
+Issues = "https://github.com/ykshah1309/neuro-research-discovery-mcp/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["neuro_research_discovery"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
+asyncio_mode = "auto"
+markers = [
+    "integration: hits real upstream APIs; skipped by default. Run with -m integration.",
+]
