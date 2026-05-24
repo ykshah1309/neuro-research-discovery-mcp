@@ -10,12 +10,15 @@ Boundary discipline:
 - String inputs have length caps and (where reasonable) regex constraints.
 - Modality enums are constrained to the values the upstream actually accepts.
 
-Trust labelling (v0.3):
-- The most attack-prone free-text fields — PubMed abstract, OpenNeuro
-  description (drawn from README), NeuroVault collection description — are
-  wrapped in `UntrustedText` envelopes that make their provenance, trust
-  level, and truncation status explicit. Titles and author lists remain as
-  plain strings since their attack surface is far smaller.
+Trust labelling (v0.3.2):
+- Every upstream-supplied free-text field is wrapped in an `UntrustedText`
+  envelope: PubMed abstract / title / journal, OpenNeuro title / description,
+  NeuroVault collection name / description / authors / journal, NeuroVault
+  image name. Author *lists* stay as `list[str]` because each entry is short
+  and the structural cue from the list type itself bounds risk.
+- Controlled-vocabulary fields (MeSH terms, keywords) and validated
+  identifiers (PMID, DOI, accession_number) stay as plain strings — they
+  don't need an envelope because they're not free text.
 """
 
 from __future__ import annotations
@@ -104,7 +107,7 @@ class GetOpenNeuroPublicationsInput(_StrictInput):
 
 class OpenNeuroDataset(BaseModel):
     accession_number: str
-    title: str
+    title: UntrustedText
     description: UntrustedText
     modalities: list[str]
     num_subjects: int
@@ -119,7 +122,7 @@ class OpenNeuroDataset(BaseModel):
 class OpenNeuroDatasetSummary(BaseModel):
     """Lightweight summary used in search results."""
     accession_number: str
-    title: str
+    title: UntrustedText
     modalities: list[str]
     num_subjects: int
     tasks: list[str]
@@ -226,12 +229,12 @@ class PrewarmReport(BaseModel):
 
 class NeuroVaultCollection(BaseModel):
     collection_id: int
-    name: str
+    name: UntrustedText
     description: UntrustedText
     doi: str | None
     preprint_doi: str | None
-    authors: str | None
-    journal_name: str | None
+    authors: UntrustedText | None
+    journal_name: UntrustedText | None
     paper_url: str | None
     num_images: int
     download_url: str | None
@@ -248,7 +251,7 @@ class NeuroVaultCollectionSearchResult(BaseModel):
 
 class NeuroVaultImage(BaseModel):
     image_id: int
-    name: str
+    name: UntrustedText
     map_type: str | None
     modality: str | None
     collection_id: int
@@ -273,8 +276,8 @@ class NeuroVaultCollectionPublications(BaseModel):
     doi: str | None
     preprint_doi: str | None
     paper_url: str | None
-    journal_name: str | None
-    authors: str | None
+    journal_name: UntrustedText | None
+    authors: UntrustedText | None
 
 
 # =========================================================================
@@ -306,9 +309,9 @@ class FindRelatedPubMedInput(_StrictInput):
 
 class PubMedArticle(BaseModel):
     pmid: str
-    title: str
+    title: UntrustedText
     authors: list[str]
-    journal: str
+    journal: UntrustedText
     year: int | None
     abstract: UntrustedText
     doi: str | None
@@ -318,7 +321,7 @@ class PubMedArticle(BaseModel):
 
 class PubMedAbstract(BaseModel):
     pmid: str
-    title: str
+    title: UntrustedText
     abstract: UntrustedText
 
 

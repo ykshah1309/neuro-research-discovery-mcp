@@ -18,16 +18,16 @@ from ..models import (
     SearchPubMedInput,
 )
 from ..doi import normalize_doi
-from ..text_safety import make_untrusted, truncate_title
+from ..text_safety import MAX_TITLE_LEN, make_untrusted
 
 
 def _article(record: dict, include_abstract: bool = True) -> PubMedArticle:
     abstract_text = record.get("abstract") or "" if include_abstract else ""
     return PubMedArticle(
         pmid=record["pmid"],
-        title=truncate_title(record.get("title") or ""),
+        title=make_untrusted(record.get("title") or "", source="pubmed", max_len=MAX_TITLE_LEN),
         authors=record.get("authors") or [],
-        journal=record.get("journal") or "",
+        journal=make_untrusted(record.get("journal") or "", source="pubmed", max_len=MAX_TITLE_LEN),
         year=record.get("year"),
         abstract=make_untrusted(abstract_text, source="pubmed"),
         doi=normalize_doi(record.get("doi")),
@@ -74,7 +74,7 @@ async def get_pubmed_article_abstract(
     r = records[0]
     return PubMedAbstract(
         pmid=r["pmid"],
-        title=truncate_title(r.get("title") or ""),
+        title=make_untrusted(r.get("title") or "", source="pubmed", max_len=MAX_TITLE_LEN),
         abstract=make_untrusted(r.get("abstract") or "", source="pubmed"),
     )
 

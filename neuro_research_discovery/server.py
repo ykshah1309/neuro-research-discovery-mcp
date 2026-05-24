@@ -1,6 +1,6 @@
 """MCP server entry point.
 
-Wires 17 typed tools across the four families to the MCP stdio transport.
+Wires 19 typed tools (4 OpenNeuro + 7 NeuroVault + 4 PubMed + 4 bridge) to the MCP stdio transport.
 
 MCP shape compliance (v0.3, spec rev 2025-06-18+):
 - Every tool declares both `inputSchema` and `outputSchema` (built from Pydantic).
@@ -27,6 +27,7 @@ from mcp.server.models import InitializationOptions
 from pydantic import BaseModel, ValidationError
 
 from . import __version__
+from .cache import cache_stats
 from .clients.neurovault import NeuroVaultClient
 from .clients.openneuro import OpenNeuroClient
 from .clients.pubmed import PubMedClient
@@ -373,6 +374,9 @@ async def _call_tool(name: str, arguments: dict[str, Any]) -> types.CallToolResu
     t0 = time.monotonic()
     err_type: str | None = None
     is_error = False
+    # Per-call cache stats — incremented by AsyncTTLCache as it serves
+    # hits/misses, snapshotted before we emit the audit log line.
+    stats_token = cache_stats.set({"hits": 0, "misses": 0})
     try:
         try:
             result = await _dispatch(name, arguments)
@@ -391,6 +395,8 @@ async def _call_tool(name: str, arguments: dict[str, Any]) -> types.CallToolResu
         return _ok_result(result)
     finally:
         elapsed_ms = round((time.monotonic() - t0) * 1000.0, 1)
+        stats = cache_stats.get() or {"hits": 0, "misses": 0}
+        cache_stats.reset(stats_token)
         try:
             audit_log.info(json.dumps({
                 "ts": round(time.time(), 3),
@@ -399,6 +405,8 @@ async def _call_tool(name: str, arguments: dict[str, Any]) -> types.CallToolResu
                 "elapsed_ms": elapsed_ms,
                 "is_error": is_error,
                 "error_type": err_type,
+                "cache_hits": stats["hits"],
+                "cache_misses": stats["misses"],
             }))
         except Exception:  # noqa: BLE001 — never let logging break the response
             pass

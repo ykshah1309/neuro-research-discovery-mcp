@@ -48,9 +48,13 @@ jobs:
         run: pytest tests/ --ignore=tests/test_integration.py -q
 
   integration:
-    # Opt-in: only runs when a maintainer triggers `workflow_dispatch` with
-    # run_integration=true, OR on the weekly schedule. Live API calls.
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    # Opt-in: live API calls. Runs only when:
+    #   - workflow_dispatch is fired AND inputs.run_integration is true, OR
+    #   - the weekly cron schedule fires.
+    # Plain workflow_dispatch with run_integration=false (the default) skips it.
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.run_integration == 'true')
+      || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

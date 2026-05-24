@@ -65,3 +65,18 @@ async def test_audit_log_records_unknown_tool_error(audit_records: list[str]):
     parsed = json.loads(audit_records[0])
     assert parsed["tool"] == "not_a_tool"
     assert parsed["is_error"] is True
+
+
+@pytest.mark.asyncio
+async def test_audit_log_includes_cache_hit_miss_counters(audit_records: list[str]):
+    """Per the v0.3.1 mapping, cache hit/miss is part of the audit shape.
+
+    On a validation error we don't reach any cache; counters should be 0/0
+    but the keys must be present so log analysis can rely on the schema.
+    """
+    await srv._call_tool("search_pubmed", {})  # ValidationError, never hits cache
+    parsed = json.loads(audit_records[0])
+    assert "cache_hits" in parsed
+    assert "cache_misses" in parsed
+    assert parsed["cache_hits"] == 0
+    assert parsed["cache_misses"] == 0

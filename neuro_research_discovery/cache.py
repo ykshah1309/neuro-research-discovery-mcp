@@ -1,8 +1,17 @@
-"""Async TTL cache with per-key lock to prevent thundering-herd on cold misses."""
+"""Async TTL cache with per-key lock to prevent thundering-herd on cold misses.
+
+Per-call cache stats:
+    `cache_stats` is a contextvars.ContextVar holding a dict
+    `{"hits": int, "misses": int}`. The server layer sets it at the start of
+    every tool call and reads it at the end for audit logging. When unset,
+    cache lookups don't touch it, so library users outside the MCP server pay
+    no overhead.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import functools
 import hashlib
 import json
@@ -12,6 +21,22 @@ from typing import Any, TypeVar
 from cachetools import TTLCache
 
 T = TypeVar("T")
+
+cache_stats: contextvars.ContextVar[dict[str, int] | None] = contextvars.ContextVar(
+    "cache_stats", default=None,
+)
+
+
+def _record_hit() -> None:
+    stats = cache_stats.get()
+    if stats is not None:
+        stats["hits"] = stats.get("hits", 0) + 1
+
+
+def _record_miss() -> None:
+    stats = cache_stats.get()
+    if stats is not None:
+        stats["misses"] = stats.get("misses", 0) + 1
 
 
 class AsyncTTLCache:
@@ -33,12 +58,17 @@ class AsyncTTLCache:
     async def get_or_set(self, key: str, factory: Callable[[], Awaitable[T]]) -> T:
         cached = self._cache.get(key, _MISS)
         if cached is not _MISS:
+            _record_hit()
             return cached  # type: ignore[return-value]
         lock = await self._lock_for(key)
         async with lock:
             cached = self._cache.get(key, _MISS)
             if cached is not _MISS:
+                # Another caller raced us to fill the cache while we waited.
+                # That's still a hit from the user's perspective.
+                _record_hit()
                 return cached  # type: ignore[return-value]
+            _record_miss()
             value = await factory()
             self._cache[key] = value
             return value

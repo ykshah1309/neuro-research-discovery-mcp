@@ -36,7 +36,7 @@ from ..models import (
     SearchNeuroVaultCollectionsInput,
     SearchNeuroVaultImagesInput,
 )
-from ..text_safety import make_untrusted, truncate_authors, truncate_title
+from ..text_safety import MAX_AUTHORS_LEN, MAX_TITLE_LEN, make_untrusted
 
 # Number of matching collections we'll expand into image results before stopping.
 # Caps fan-out for search_neurovault_images.
@@ -52,16 +52,23 @@ def _matches(record: dict[str, Any], terms: list[str]) -> bool:
     return all(t in haystack for t in terms)
 
 
+def _wrap_or_none(value, source: str, max_len: int):
+    """Wrap a string-or-None in UntrustedText, preserving None."""
+    if value is None or value == "":
+        return None
+    return make_untrusted(value, source=source, max_len=max_len)
+
+
 def _collection_from_projection(p: dict[str, Any]) -> NeuroVaultCollection:
     cid = int(p.get("id") or 0)
     return NeuroVaultCollection(
         collection_id=cid,
-        name=truncate_title(p.get("name") or ""),
+        name=make_untrusted(p.get("name") or "", source="neurovault", max_len=MAX_TITLE_LEN),
         description=make_untrusted(p.get("description") or "", source="neurovault"),
         doi=p.get("DOI") or None,
         preprint_doi=p.get("preprint_DOI") or None,
-        authors=truncate_authors(p.get("authors")),
-        journal_name=p.get("journal_name"),
+        authors=_wrap_or_none(p.get("authors"), "neurovault", MAX_AUTHORS_LEN),
+        journal_name=_wrap_or_none(p.get("journal_name"), "neurovault", MAX_TITLE_LEN),
         paper_url=p.get("paper_url"),
         num_images=int(p.get("number_of_images") or 0),
         download_url=p.get("download_url") or f"https://neurovault.org/collections/{cid}/download",
@@ -72,12 +79,12 @@ def _collection_from_full(c: dict[str, Any]) -> NeuroVaultCollection:
     cid = int(c.get("id") or 0)
     return NeuroVaultCollection(
         collection_id=cid,
-        name=truncate_title(c.get("name") or ""),
+        name=make_untrusted(c.get("name") or "", source="neurovault", max_len=MAX_TITLE_LEN),
         description=make_untrusted(c.get("description") or "", source="neurovault"),
         doi=c.get("DOI"),
         preprint_doi=c.get("preprint_DOI"),
-        authors=truncate_authors(c.get("authors")),
-        journal_name=c.get("journal_name"),
+        authors=_wrap_or_none(c.get("authors"), "neurovault", MAX_AUTHORS_LEN),
+        journal_name=_wrap_or_none(c.get("journal_name"), "neurovault", MAX_TITLE_LEN),
         paper_url=c.get("paper_url"),
         num_images=int(c.get("number_of_images") or 0),
         download_url=c.get("download_url") or f"https://neurovault.org/collections/{cid}/download",
@@ -87,7 +94,7 @@ def _collection_from_full(c: dict[str, Any]) -> NeuroVaultCollection:
 def _image_model(i: dict[str, Any]) -> NeuroVaultImage:
     return NeuroVaultImage(
         image_id=int(i.get("id") or 0),
-        name=truncate_title(i.get("name") or ""),
+        name=make_untrusted(i.get("name") or "", source="neurovault", max_len=MAX_TITLE_LEN),
         map_type=i.get("map_type"),
         modality=i.get("modality"),
         collection_id=int(i.get("collection_id") or 0),
@@ -304,6 +311,6 @@ async def get_neurovault_collection_publications(
         doi=raw.get("DOI"),
         preprint_doi=raw.get("preprint_DOI"),
         paper_url=raw.get("paper_url"),
-        journal_name=raw.get("journal_name"),
-        authors=raw.get("authors"),
+        journal_name=_wrap_or_none(raw.get("journal_name"), "neurovault", MAX_TITLE_LEN),
+        authors=_wrap_or_none(raw.get("authors"), "neurovault", MAX_AUTHORS_LEN),
     )

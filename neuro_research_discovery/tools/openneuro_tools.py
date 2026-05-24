@@ -30,9 +30,9 @@ from ..models import (
 from ..doi import normalize_doi
 from ..text_safety import (
     MAX_FILES_PER_LISTING,
+    MAX_TITLE_LEN,
     cap_list,
     make_untrusted,
-    truncate_title,
 )
 
 
@@ -42,7 +42,7 @@ def _summary(node: dict[str, Any]) -> OpenNeuroDatasetSummary:
     summary = snap.get("summary") or {}
     return OpenNeuroDatasetSummary(
         accession_number=node.get("id", ""),
-        title=truncate_title(desc.get("Name") or ""),
+        title=make_untrusted(desc.get("Name") or "", source="openneuro", max_len=MAX_TITLE_LEN),
         modalities=list(summary.get("modalities") or []),
         num_subjects=len(summary.get("subjects") or []),
         tasks=list(summary.get("tasks") or []),
@@ -106,7 +106,7 @@ async def get_openneuro_dataset(
 
     return OpenNeuroDataset(
         accession_number=ds.get("id", params.accession_number),
-        title=truncate_title(desc.get("Name") or ds.get("name", "")),
+        title=make_untrusted(desc.get("Name") or ds.get("name", ""), source="openneuro", max_len=MAX_TITLE_LEN),
         description=make_untrusted(description, source="openneuro"),
         modalities=list(summary.get("modalities") or []),
         num_subjects=len(summary.get("subjects") or []),

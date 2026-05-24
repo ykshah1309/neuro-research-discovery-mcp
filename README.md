@@ -6,7 +6,7 @@ MCP server bridging **OpenNeuro**, **NeuroVault**, and **PubMed** for AI-agent-d
 
 Three of the most useful neuroimaging research data sources — raw BIDS datasets (OpenNeuro), derived statistical maps (NeuroVault), and the published literature (PubMed) — live in three different APIs with three different query languages and zero cross-references. An agent that wants to answer "what datasets and brain maps exist for the papers most cited on default-mode-network autism research?" today has to chain three searches manually.
 
-This MCP exposes **17 typed tools** (4 + 5 + 4 + 4) across those three sources, plus four **bridge tools** that cross-walk between them via DOI matching and parallel keyword search. The bridge tools are the differentiator: they're what makes this more than three separate API wrappers.
+This MCP exposes **19 typed tools** (4 OpenNeuro + 7 NeuroVault + 4 PubMed + 4 bridge) across those three sources. The four bridge tools are the differentiator: they cross-walk via DOI matching and parallel keyword search, which is what makes this more than three separate API wrappers. The seven NeuroVault tools include two cache-admin tools (`get_neurovault_cache_status`, `prewarm_neurovault_index`) because the upstream API has no server-side search and we maintain a 17,000-collection index locally.
 
 Built as a sibling to [nifti-inspector-mcp](https://github.com/ykshah1309/nifti-inspector-mcp), which handles local NIfTI / BIDS file inspection.
 
@@ -51,7 +51,7 @@ If the `neuro-research-discovery` console script isn't on PATH for Claude Deskto
 }
 ```
 
-Restart Claude Desktop fully (system-tray Quit, then relaunch). The 17 tools will appear in the tools picker.
+Restart Claude Desktop fully (system-tray Quit, then relaunch). The 19 tools will appear in the tools picker.
 
 ## Available tools
 

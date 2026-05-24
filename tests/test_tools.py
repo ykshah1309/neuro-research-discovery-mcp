@@ -69,7 +69,8 @@ async def test_get_openneuro_dataset_extracts_all_fields():
             GetOpenNeuroDatasetInput(accession_number="ds000001"), client
         )
         assert result.accession_number == "ds000001"
-        assert result.title == "BIDS Demo"
+        assert result.title.text == "BIDS Demo"
+        assert result.title.source == "openneuro"
         assert result.num_subjects == 2
         assert result.species == "Human"
         assert result.tasks == ["rest"]
@@ -114,7 +115,7 @@ async def test_search_openneuro_returns_summaries():
             SearchOpenNeuroInput(query="autism", modality="mri", max_results=10), client
         )
         assert result.total_returned == 3
-        assert result.datasets[0].title == "Dataset 0"
+        assert result.datasets[0].title.text == "Dataset 0"
     finally:
         await client.aclose()
 
