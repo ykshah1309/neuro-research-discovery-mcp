@@ -137,26 +137,41 @@ Full design rationale in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Per-sou
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/                       # 87 unit tests, mocked HTTP, ~10s
-pytest tests/ -m integration        # opt-in live API hits
+pytest tests/                       # ~90 unit tests, mocked HTTP, ~12s
+pytest tests/ -m integration        # opt-in live API hits, skipped by default
 ```
 
 ## Reproducible installs
 
 `pyproject.toml` keeps loose lower-bound + major-version upper-bound pins so the
-library is reusable. For deployments that need bit-identical installs (Docker
-images, Claude Desktop wraparounds, CI runners), pin against the lockfile:
+library is reusable. Two lockfile-equivalents pin the actual install closure:
+
+| File | Use it for | What it pins |
+|---|---|---|
+| `constraints.txt` | production deploys (Docker, Claude Desktop wraparounds) | runtime dependency closure only |
+| `constraints-dev.txt` | CI and development environments | runtime + `pytest`, `pytest-asyncio`, `respx`, `pip-audit`, `pipdeptree` |
 
 ```bash
+# Production
 pip install -e . -c constraints.txt
+# Dev / CI
+pip install -e ".[dev]" -c constraints-dev.txt
 ```
 
-Regenerate after a dependency upgrade with:
+Regenerate after a dependency upgrade:
 
 ```bash
+# Runtime closure
 python -m pipdeptree -p neuro-research-discovery-mcp --freeze \
   | grep -v '^-e' | sort -u > constraints.txt
+# Dev + audit closure
+python -m pipdeptree \
+  -p neuro-research-discovery-mcp,pytest,pytest-asyncio,respx,pip-audit,pipdeptree \
+  --freeze | grep -v '^-e' | sort -u > constraints-dev.txt
 ```
+
+`pip-audit` runs only in CI; locally you can install it separately with
+`pip install pip-audit` if you want to scan before pushing.
 
 ## Audit logging
 
@@ -164,12 +179,31 @@ Every tool call emits a single JSON line to stderr via the
 `neuro_research_discovery.audit` logger:
 
 ```json
-{"ts":1779580487.801,"tool":"search_pubmed","arg_keys":["query","max_results"],"elapsed_ms":541.3,"is_error":false,"error_type":null}
+{
+  "ts": 1779581490.299,
+  "tool": "search_pubmed",
+  "arg_keys": ["max_results", "query"],
+  "elapsed_ms": 750.0,
+  "is_error": false,
+  "error_type": null,
+  "cache_hits": 0,
+  "cache_misses": 2
+}
 ```
 
-We log **argument keys** but not values to avoid surprising users by writing
-free-text queries to logs. Redirect or capture this stream however your
-deployment expects (file, syslog, Loki).
+Field guide:
+- `arg_keys` — **keys only**, never values. Free-text queries can be long or
+  sensitive and we don't want them auto-persisted to logs.
+- `elapsed_ms` — wall-clock latency from MCP `call_tool` entry to return.
+- `cache_hits` / `cache_misses` — per-call counters of the in-memory TTL
+  cache. A repeated identical call should show hits matching the previous
+  call's misses.
+- `is_error` / `error_type` — `is_error: true` means the result carried a
+  structured `ToolError`; `error_type` is the exception class name (or
+  `"ValidationError"` for input rejection).
+
+Redirect or capture this stream however your deployment expects (file,
+syslog, Loki).
 
 ## Roadmap
 
@@ -182,11 +216,11 @@ OpenAlex (or Crossref / Semantic Scholar) enrichment to fix the
 - **Transport: stdio only.** The server speaks MCP over stdin/stdout to a single local client. It does not bind a network port.
 - **Outbound network egress** to three hosts: `openneuro.org`, `neurovault.org`, `eutils.ncbi.nlm.nih.gov`. If you run this in a restricted environment, allowlist those.
 - **MCP shape compliance (spec rev 2025-06-18+).** Every tool declares both `inputSchema` and `outputSchema`. Successful responses populate both `content` (TextContent JSON, for legacy clients) and `structuredContent` (validated against the output schema). Errors set `isError=true` and return a typed `ToolError`. Tools carry `readOnlyHint=true`, `openWorldHint=true`, `idempotentHint=true`, `destructiveHint=false` annotations.
-- **Upstream text is untrusted.** PubMed abstracts, OpenNeuro READMEs, and NeuroVault descriptions are user-supplied. They can carry prompt-injection payloads. We can't semantically sanitize them, so we wrap the most attack-prone fields (abstract, description) in an explicit `UntrustedText` envelope:
+- **Upstream text is untrusted.** PubMed abstracts, OpenNeuro READMEs, and NeuroVault descriptions are user-supplied. They can carry prompt-injection payloads. We can't semantically sanitize them, so we wrap **every** upstream free-text field — PubMed `abstract` / `title` / `journal`, OpenNeuro `title` / `description`, NeuroVault collection `name` / `description` / `authors` / `journal_name`, NeuroVault image `name` — in an explicit `UntrustedText` envelope:
   ```json
   { "text": "...", "source": "pubmed", "truncated": false, "original_length": 1234, "trust": "untrusted_upstream" }
   ```
-  Every free-text field is hard-capped at 4 KB. Every response that carries any uploader text also emits a top-level `untrusted_text_warning` reminder. Treat these fields as data, never as instructions.
+  Author *lists* (`list[str]`) and controlled vocabularies (MeSH terms, keywords) are not wrapped — each list item is short and the list type is itself a structural cue. Every free-text field is hard-capped at 4 KB. Every response that carries any uploader text also emits a top-level `untrusted_text_warning` reminder. Treat these fields as data, never as instructions.
 - **Inputs are validated strictly.** All tool inputs use Pydantic `extra="forbid"` with length caps, regex constraints on PMIDs / accessions / DOIs, and enums on modality fields. Unknown fields raise instead of being silently dropped.
 - **DOI normalization.** Inbound DOIs are normalized (lowercased, prefix-stripped, validated against `10.\d{4,9}/...`) before comparison so cross-source matches don't miss on casing differences.
 - **No persistent secrets.** The only credential the server accepts is `PUBMED_API_KEY` (optional, raises PubMed rate limit). Both that and `PUBMED_EMAIL` live in `.env` (gitignored).

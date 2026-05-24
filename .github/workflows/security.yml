@@ -24,14 +24,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install package + dev deps
+      - name: Install package + dev/audit deps with bit-identical pins
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-          pip install pip-audit
-      - name: Run pip-audit
-        # Fail the build only on known-vulnerable installed packages.
-        run: pip-audit --strict --progress-spinner off
+          pip install -e ".[dev]" pip-audit pipdeptree -c constraints-dev.txt
+      - name: Run pip-audit on the runtime closure
+        # Audit only the runtime dependency set; dev tooling churn doesn't
+        # block releases for our users.
+        run: pip-audit --strict --progress-spinner off -r constraints.txt
 
   tests:
     runs-on: ubuntu-latest
@@ -40,10 +40,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install with pinned constraints for bit-identical CI
+      - name: Install package + dev deps with bit-identical pins
+        # constraints-dev.txt pins both the runtime AND the test runner +
+        # audit tooling, so this install is fully reproducible.
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]" -c constraints.txt
+          pip install -e ".[dev]" -c constraints-dev.txt
       - name: Unit tests
         run: pytest tests/ --ignore=tests/test_integration.py -q
 

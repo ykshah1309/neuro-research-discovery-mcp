@@ -96,3 +96,12 @@ fall back to Crossref-only enrichment and re-scope.
 - ML-based topic clustering across results.
 - Persistent graph store.
 - Crossref / Semantic Scholar parity (additive, not exclusive — pick after v0.4 ships).
+- **Tool-response scanner / runtime policy layer.** OWASP MCP guidance
+  increasingly flags tool-output prompt injection as a runtime problem, not
+  just a schema problem. v0.3.x contains injection structurally (truncation
+  + `UntrustedText` envelope + audit trail), but does not semantically detect
+  injection-like payloads. A v0.5 spike should evaluate: (a) a small
+  keyword/heuristic scanner that flags suspicious tokens like "ignore
+  previous", `<system>`, "execute the following"; (b) optional LLM-based
+  classification as a hook the MCP host can opt into. Both are advisory
+  only — final defense is still at the host/agent layer.
