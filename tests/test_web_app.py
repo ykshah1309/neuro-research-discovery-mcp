@@ -13,12 +13,19 @@ from __future__ import annotations
 
 import json
 
-import httpx
 import pytest
-from fastapi.testclient import TestClient
 
-from neuro_research_discovery.web.app import app
-from tests.conftest import (
+# Skip the whole module when the web extra isn't installed. Local devs who
+# only `pip install -e ".[dev]"` (no web stack) shouldn't see a confusing
+# collection error; they get a clean "module not collected — install [web]".
+fastapi = pytest.importorskip(
+    "fastapi",
+    reason="web UI tests require the `web` extra: pip install -e \".[web]\"",
+)
+from fastapi.testclient import TestClient  # noqa: E402
+
+from neuro_research_discovery.web.app import app  # noqa: E402
+from tests.conftest import (  # noqa: E402
     FakeEntrez,
     make_esearch_xml,
     make_pubmed_efetch_xml,
