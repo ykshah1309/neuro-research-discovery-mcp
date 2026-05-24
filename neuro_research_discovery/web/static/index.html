@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>neuro-research-discovery</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="app-header">
+  <div class="brand">
+    <strong>neuro-research-discovery</strong>
+    <span class="muted">OpenNeuro · NeuroVault · PubMed</span>
+  </div>
+  <div class="status-pills">
+    <span id="cache-pill" class="pill pill-muted" title="NeuroVault collection index status">cache: …</span>
+    <span id="version-pill" class="pill pill-muted">v…</span>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- Left rail: tool picker -->
+  <aside class="rail">
+    <h2>Tools</h2>
+    <div id="tool-search-wrap">
+      <input id="tool-search" type="search" placeholder="filter…" autocomplete="off">
+    </div>
+    <nav id="tool-list" aria-label="tools"></nav>
+  </aside>
+
+  <!-- Center: selected tool form + response -->
+  <section class="content">
+    <header class="content-header">
+      <h2 id="selected-name">Pick a tool to start</h2>
+      <p id="selected-desc" class="muted"></p>
+    </header>
+
+    <form id="tool-form" class="hidden">
+      <div id="form-fields"></div>
+      <div class="form-actions">
+        <button type="submit" id="run-btn">Run</button>
+        <button type="button" id="reset-btn" class="btn-ghost">Reset</button>
+        <span id="run-status" class="run-status muted"></span>
+      </div>
+    </form>
+
+    <section id="response" class="response hidden">
+      <header class="response-header">
+        <h3>Response</h3>
+        <div class="response-meta">
+          <span id="resp-error" class="pill hidden">error</span>
+          <span id="resp-timing" class="muted"></span>
+        </div>
+      </header>
+      <pre id="response-body"></pre>
+    </section>
+  </section>
+
+  <!-- Right rail: live audit log -->
+  <aside class="audit">
+    <header class="audit-header">
+      <h2>Live audit log</h2>
+      <button id="audit-clear" class="btn-ghost btn-sm" type="button">clear</button>
+    </header>
+    <div id="audit-log" class="audit-log" aria-live="polite"></div>
+    <footer class="audit-footer muted">
+      One line per tool call · arg keys only · cache hit/miss tracked
+    </footer>
+  </aside>
+
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

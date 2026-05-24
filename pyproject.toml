@@ -43,9 +43,18 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "respx>=0.20.0",
 ]
+web = [
+    # FastAPI app for the browser UI. starlette + uvicorn + sse-starlette
+    # are already pinned via mcp's transitive closure.
+    "fastapi>=0.110.0,<1.0.0",
+]
 
 [project.scripts]
 neuro-research-discovery = "neuro_research_discovery.server:main"
+neuro-research-discovery-web = "neuro_research_discovery.web.__main__:main"
+
+[tool.hatch.build.targets.wheel.force-include]
+"neuro_research_discovery/web/static" = "neuro_research_discovery/web/static"
 
 [project.urls]
 Homepage = "https://github.com/ykshah1309/neuro-research-discovery-mcp"

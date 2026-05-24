@@ -223,3 +223,52 @@ These exercise simpler single-tool paths and have lower failure surface than the
 ## Pacing reminder
 
 Total budget for this MCP: **6–7 minutes** if it's the second half of a combined demo with nifti-inspector. **8–9 minutes** if it's standalone. Don't run long — the Q&A is where the BME folks decide whether to actually clone the repo.
+
+---
+
+## Optional segment: zero-install web UI for the audience (3 min)
+
+If your audience doesn't have Claude Desktop and you want them to actually try the tools during the talk, hand them a URL.
+
+### Pre-event setup (the same night as the screenshot capture)
+
+```powershell
+cd C:\Users\yksha\bme-mcp\neuro-research-discovery-mcp
+pip install -e ".[web]" -c constraints-dev.txt
+```
+
+Find your LAN IP (Settings → Network → Wi-Fi details, or `ipconfig`). Write it on the whiteboard or generate a QR code for `http://<your-ip>:8000/`.
+
+### Start the server right before going on stage
+
+```powershell
+neuro-research-discovery-web --host 0.0.0.0 --port 8000
+```
+
+Test from your phone first — the same SSID as the demo laptop — make sure the page loads and one tool call succeeds. If your network blocks LAN-to-LAN traffic (some campus networks do), fall back to a phone hotspot or to the Claude Desktop demo only.
+
+### What the audience sees
+
+- A header pill that says `cache: fresh · 17,333 collections` (if you prewarmed properly).
+- A left rail with all 19 tools grouped by family.
+- A center form auto-generated from each tool's input schema. Required fields are starred. Enums (like `modality`) are dropdowns.
+- The right rail shows a live audit log streaming every tool call from every guest — so they see each other's queries land in real time with cache hit/miss counters.
+
+### Suggested first prompts to seed the audience
+
+1. *Pick `search_neurovault_collections`, type `Stroop`, hit Run.* → 3 collections, sub-second (from the warm cache).
+2. *Pick `find_neurovault_maps_for_paper`, type `26178017`, hit Run.* → confirms the DOI-exact cross-walk in 1-2s.
+3. *Pick `get_neurovault_cache_status`, hit Run.* → shows the cache is hot.
+
+The live audit log on the right is the talking point: *"every one of those is one HTTP call, logged with cache hit/miss, arg keys but not values, latency, and a `via: web` marker. Same audit trail my MCP shows when Claude Desktop calls the tools."*
+
+### Risks of the web segment
+
+- **CORS / LAN routing.** Some networks isolate clients. Test with your phone before going on stage.
+- **One disk cache shared across guests.** First click on a NeuroVault search by the first guest is fast (cache is hot); but if you forgot to prewarm, that first click is a 3-minute stall for everyone watching.
+- **No auth.** Anyone on the network can hit it. Fine for a controlled event; do NOT leave it running afterwards on a campus network.
+- **PUBMED rate limit shared.** All guests hitting `search_pubmed` count against the same 3 req/sec anonymous quota. Set `PUBMED_API_KEY` for the demo to lift that to 10/sec.
+
+### Fallback if the web UI fails on stage
+
+You still have the Claude Desktop demo as the primary. The web UI is the audience-participation bonus. If it breaks, just say "I'll send the URL after the talk so you can try it from your seat or your office" — most won't notice, and you've kept the main demo intact.

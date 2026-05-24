@@ -2,18 +2,22 @@
 #
 # Use this in CI and for development environments. It pins everything in
 # constraints.txt (runtime) plus the test runner (pytest, pytest-asyncio,
-# respx) and security audit tooling (pip-audit, pipdeptree).
+# respx), security audit tooling (pip-audit, pipdeptree), and the web UI
+# (fastapi; uvicorn + starlette + sse-starlette come from mcp's closure).
 #
-# Regenerate with (from the project root):
-#   python -m pipdeptree #     -p neuro-research-discovery-mcp,pytest,pytest-asyncio,respx,pip-audit,pipdeptree #     --freeze | grep -v "^-e" | sort -u
+# Regenerate with:
+#   python -m pipdeptree \
+#     -p neuro-research-discovery-mcp,pytest,pytest-asyncio,respx,pip-audit,pipdeptree,fastapi \
+#     --freeze | grep -v "^-e" | sort -u
 #
 # Use:
-#   pip install -e ".[dev]" pip-audit pipdeptree -c constraints-dev.txt
+#   pip install -e ".[dev,web]" -c constraints-dev.txt
 #
 # Generated against Python 3.12.10.
 #
-# Windows-only deps are tagged with `; sys_platform == "win32"` so Linux/
+# Windows-only deps carry a `; sys_platform == "win32"` marker so Linux/
 # macOS installers (including CI) ignore them.
+annotated-doc==0.0.4
 annotated-types==0.7.0
 anyio==4.13.0
 attrs==26.1.0
@@ -28,6 +32,7 @@ click==8.4.0
 colorama==0.4.6
 cyclonedx-python-lib==11.7.0
 defusedxml==0.7.1
+fastapi==0.136.3
 gql==4.0.0
 graphql-core==3.2.8
 h11==0.16.0

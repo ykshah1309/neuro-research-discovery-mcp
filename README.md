@@ -135,6 +135,33 @@ More worked examples in [`docs/EXAMPLES.md`](docs/EXAMPLES.md).
 
 Full design rationale in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Per-source quirks documented in [`docs/API_NOTES.md`](docs/API_NOTES.md).
 
+## Web UI (zero-install for guests / events)
+
+Sometimes you want non-technical researchers to try the tools without setting up Claude Desktop. The repo ships a small FastAPI web app that exposes the same 19 typed tools through a browser form, with a live audit log so users see the tool calls + cache hits as they happen.
+
+```bash
+pip install -e ".[web]" -c constraints-dev.txt
+neuro-research-discovery-web                       # localhost only
+neuro-research-discovery-web --host 0.0.0.0        # serve to your LAN
+```
+
+Then open `http://localhost:8000/` (or your LAN IP for guests). The UI has three regions:
+
+- **Left:** tool picker grouped by family (OpenNeuro / NeuroVault / PubMed / Bridge), with a search box.
+- **Center:** form auto-generated from the selected tool's input schema (typed fields, enums as dropdowns, validation client-side via the same regex/length constraints as the MCP), plus the JSON response with `UntrustedText` envelopes preserved.
+- **Right:** live audit log over Server-Sent Events — one line per call with `tool`, `elapsed_ms`, `cache_hits`, `cache_misses`, `error_type`, and a `via: "web"` marker so you can distinguish browser traffic from Claude-Desktop traffic in the same audit stream.
+
+A cache-status pill in the header shows whether the NeuroVault collection index is fresh, stale-but-serveable, or missing — so guests know whether their first search will be sub-second or 2–3 minutes.
+
+**No LLM in the loop.** This is a typed search/research UI, not an agent. If you want natural-language querying, use the MCP via Claude Desktop or any other MCP-compatible client.
+
+**For an in-person event:**
+1. Install the `[web]` extra on the demo laptop.
+2. Prewarm the NeuroVault index the night before with `python scripts/bench_neurovault_cold.py`.
+3. Set `PUBMED_EMAIL` in `.env` (real address) so NCBI can identify your traffic.
+4. Start the server with `neuro-research-discovery-web --host 0.0.0.0`.
+5. Tell guests to open `http://<laptop-LAN-IP>:8000/` on their phones or laptops.
+
 ## Running the tests
 
 ```bash
