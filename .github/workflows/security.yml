@@ -12,7 +12,11 @@ on:
   workflow_dispatch:
     inputs:
       run_integration:
-        description: "Also run live integration tests"
+        description: "Also run live integration tests (live API calls)"
+        type: boolean
+        default: false
+      run_neurovault_bench:
+        description: "Also run the NeuroVault cold-start benchmark (~3 min, rebuilds index)"
         type: boolean
         default: false
 
@@ -84,12 +88,17 @@ jobs:
         run: pytest tests/test_integration.py -m integration -q
 
   neurovault-cold-bench:
-    # Track NeuroVault cold-start latency over time. Runs weekly on the cron
-    # schedule and on manual workflow_dispatch (handy for verifying a perf
-    # fix without waiting for the next Monday). Result is uploaded as an
-    # artifact so we can spot creeping regressions when NeuroVault grows or
-    # tightens limits.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # Track NeuroVault cold-start latency over time. Triggers:
+    #   - weekly cron schedule (always)
+    #   - manual workflow_dispatch with run_neurovault_bench=true (opt-in)
+    # The bench takes ~3 minutes and deletes any existing on-disk index, so
+    # it doesn't run on every manual dispatch by default — maintainers who
+    # only want to test the unit suite or integration job aren't forced to
+    # wait. Result is uploaded as an artifact so we can spot creeping
+    # regressions when NeuroVault grows or tightens limits.
+    if: |
+      github.event_name == 'schedule'
+      || (github.event_name == 'workflow_dispatch' && github.event.inputs.run_neurovault_bench == 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
