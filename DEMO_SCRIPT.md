@@ -105,17 +105,24 @@ Expected: `status: "fresh"`, `collection_count: 17333`, `partial: false`. If it 
 
 ---
 
-## 3. Drill down: `find_papers_using_dataset` (1.5 min)
+## 3. The cross-source bridge: `find_neurovault_maps_for_paper` (1.5 min)
 
 **Prompt:**
 
-> "Take OpenNeuro dataset ds000030 and find every PubMed paper that uses it."
+> "For PubMed paper 26178017, are there any associated brain maps on NeuroVault?"
 
-**Expected:** Claude calls `find_papers_using_dataset(openneuro_accession="ds000030")`. Returns the dataset's metadata DOIs, resolves each to a PMID via PubMed's `esearch term="<doi>[DOI]"`, batch-fetches the full records, returns a `CrossSourceResult` with the dataset summary + N PubMed articles.
+**Expected:** Claude calls `find_neurovault_maps_for_paper(pmid="26178017")`. The tool fetches the PubMed record, extracts the DOI (`10.1038/ncomms8751`), normalizes it, then scans the cached NeuroVault index for collections whose `DOI` or `preprint_DOI` matches. Returns a `CrossSourceResult` with the paper + the matched NeuroVault collection (1345: *"Transient brain activity disentangles fMRI resting-state dynamics..."*). `linkage_evidence` shows both as `doi_exact`.
 
 **Talking points:**
 
-> "DOI normalization is doing the work here — OpenNeuro stores DOIs with `https://` prefixes, mixed case, sometimes free text. The MCP normalizes them all to `10.<registrant>/<suffix>` lowercase before the lookup. A naive keyword search would miss most of these."
+> "DOI normalization is doing the real work here — OpenNeuro and NeuroVault both store DOIs with `https://` prefixes, mixed case, sometimes free text. The MCP normalizes them all to `10.<registrant>/<suffix>` lowercase before the cross-walk. A naive keyword search would miss most of these matches."
+>
+> "This is also the direction that actually works well today. The opposite direction — given an OpenNeuro dataset, find papers that used it — is much sparser, because OpenNeuro's `associatedPaperDOI` metadata field is rarely populated by uploaders. That accuracy gap is exactly what v0.4's OpenAlex enrichment is designed to close: forward citation search would find any paper that cites a dataset's DOI, not just papers the uploader manually linked. Until then, the tool returns a structured `notes` field saying so rather than hallucinating."
+
+**Verified working PMIDs (any of these work as backups):**
+- `26178017` → collection 1345 (Karahanoğlu & Van De Ville, *Nat Commun* 2015)
+- `24099851` → collection 109 (Hagmann et al., *NeuroImage* 2014)
+- `12808459` → collection 1056 (Beckmann & Smith, *Nat Neurosci* 2003)
 
 ---
 
@@ -174,7 +181,7 @@ If the live demo fails on the day, switch language without apology:
 Run the four prompts above in Claude Desktop, `Win+Shift+S` to capture each tool call + response, save to `demo_screenshots/`:
 
 1. `01-comprehensive_search.png` — the omnibus result with `linkage_evidence`
-2. `02-find_papers_using_dataset.png` — the DOI cross-walk
+2. `02-find_neurovault_maps_for_paper.png` — the DOI cross-walk (PMID 26178017 → collection 1345)
 3. `03-cache_status.png` — the cache state with `fresh, 17333`
 4. `04-cross_mcp_handoff.png` — list_files + load_nifti in one chat
 
@@ -187,7 +194,8 @@ Run the four prompts above in Claude Desktop, `Win+Shift+S` to capture each tool
 | Tools don't appear in Claude Desktop | Config didn't reload | Fully quit Claude (system tray → Quit), reopen. Verify the JSON parses with `python -m json.tool < claude_desktop_config.json`. |
 | First search hangs ~3 minutes | NeuroVault disk cache wasn't prewarmed | Run `python scripts/bench_neurovault_cold.py` once before going on stage. |
 | Server refuses to start | `NEURO_REQUIRE_PUBMED_EMAIL=1` + placeholder email | Set real `PUBMED_EMAIL` in the config's `env` block or in `.env`. |
-| `find_papers_using_dataset` returns 0 papers | Dataset has no DOIs in OpenNeuro metadata, or DOIs aren't in PubMed | The `notes` field on the response says exactly which. Pick a different accession with a known publication, e.g. `ds000030`. |
+| `find_neurovault_maps_for_paper` returns 0 collections | PubMed record has no DOI, or DOI isn't on any NeuroVault collection | Use a backup PMID from the list above (26178017, 24099851, 12808459 all verified). Or switch to `find_datasets_for_topic` as a fallback. |
+| `find_papers_using_dataset` returns 0 papers | OpenNeuro `associatedPaperDOI` is empty for most datasets | Known limitation — use the reverse direction (`find_neurovault_maps_for_paper`) instead. v0.4 OpenAlex enrichment is the planned fix. |
 | PubMed 429 errors mid-demo | Anonymous rate limit (3/s) hit | Add `PUBMED_API_KEY` to the env block. |
 | Tool count is 23 but feels wrong | If you only see 19, nifti-inspector isn't loaded. If only 4, this MCP isn't loaded. | Check both mcpServers blocks in the JSON config. |
 
