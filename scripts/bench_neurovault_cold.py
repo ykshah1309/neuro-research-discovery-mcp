@@ -8,18 +8,13 @@ table, we'd see the time creep up over weeks.
 Usage:
     python scripts/bench_neurovault_cold.py [--output PATH]
 
-Output: a single JSON object on stdout (and optionally a file at --output)
-shaped like:
-    {
-      "timestamp": "2026-05-23T20:55:12Z",
-      "elapsed_seconds": 168.2,
-      "collection_count": 17333,
-      "partial": false,
-      "ok": true,
-      "schema_version": 2,
-      "platform": "win32",
-      "python": "3.12.10"
-    }
+Output: a single-line compact JSON object on stdout (suitable for line-
+oriented log ingestion) and optionally a pretty-printed copy at --output
+for human review / CI artifact upload. Shape:
+
+    {"timestamp":"2026-05-23T20:55:12Z","elapsed_seconds":168.2,
+     "collection_count":17333,"partial":false,"ok":true,
+     "schema_version":2,"platform":"win32","python":"3.12.10"}
 
 The script deletes any existing on-disk index first so we measure a true
 cold rebuild, not a disk-cache load. It restores nothing; the rebuild writes
@@ -86,11 +81,12 @@ def main() -> int:
     args = ap.parse_args()
 
     result = asyncio.run(_run())
-    text = json.dumps(result, indent=2)
-    print(text)
+    # Stdout: compact, single-line JSON for line-oriented log ingestion.
+    print(json.dumps(result, separators=(",", ":")))
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(text, encoding="utf-8")
+        # Artifact file: pretty-printed for human review.
+        args.output.write_text(json.dumps(result, indent=2), encoding="utf-8")
     # Non-zero exit if the run failed so CI can flag it.
     return 0 if result["ok"] else 1
 
