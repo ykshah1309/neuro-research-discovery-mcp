@@ -230,7 +230,7 @@ OpenAlex (or Crossref / Semantic Scholar) enrichment to fix the
 
 NCBI requires every Entrez request to identify the calling tool and a contact email. The two relevant settings:
 
-- `PUBMED_EMAIL` — set to your real address before production use. If left at the placeholder the server logs a warning at startup.
+- `PUBMED_EMAIL` — set to your real address before production use. If left at the placeholder the server logs a warning at startup. **For production deployments**, also set `NEURO_REQUIRE_PUBMED_EMAIL=1` so the server *refuses to start* with the placeholder instead of failing later at first 429 from NCBI.
 - `PUBMED_API_KEY` — optional, lifts the rate limit from 3 req/sec to 10 req/sec.
 
 For sustained or institutional use, **register your tool with NCBI** via the [E-utilities API key page](https://www.ncbi.nlm.nih.gov/account/) so they can contact you about abuse before blocking your IP. The `tool=` parameter sent on every request is fixed to `neuro-research-discovery-mcp`.

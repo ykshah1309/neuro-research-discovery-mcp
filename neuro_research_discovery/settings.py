@@ -16,12 +16,24 @@ _PLACEHOLDER_EMAIL = "neuro-research-discovery-mcp@example.com"
 PUBMED_EMAIL: str = os.environ.get("PUBMED_EMAIL") or _PLACEHOLDER_EMAIL
 PUBMED_TOOL: str = "neuro-research-discovery-mcp"
 
+# Production opt-in: when NEURO_REQUIRE_PUBMED_EMAIL=1 is set, the server
+# refuses to start with the placeholder email. NCBI requires identification
+# and may block traffic from instances using a placeholder; production
+# deployments should opt in to surface the misconfiguration at startup
+# rather than at first-request 429.
+REQUIRE_PUBMED_EMAIL: bool = os.environ.get("NEURO_REQUIRE_PUBMED_EMAIL", "").lower() in ("1", "true", "yes")
+
 if PUBMED_EMAIL == _PLACEHOLDER_EMAIL:
-    _logger.warning(
+    msg = (
         "PUBMED_EMAIL is not set. NCBI requires identification on every Entrez "
         "request and may rate-limit or block traffic with a placeholder email. "
         "Set PUBMED_EMAIL=<your.email@institution.tld> in your environment or .env."
     )
+    if REQUIRE_PUBMED_EMAIL:
+        raise RuntimeError(
+            f"NEURO_REQUIRE_PUBMED_EMAIL=1 is set, but {msg}"
+        )
+    _logger.warning(msg)
 
 # Rate limit (requests per second) per upstream. PubMed depends on api key presence.
 PUBMED_RATE_PER_SEC: float = 9.0 if PUBMED_API_KEY else 2.5  # leave headroom under 10 / 3
