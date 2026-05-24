@@ -108,8 +108,10 @@ These run live in Claude Desktop once the server is configured.
 4. **"What does NeuroVault have for the Stroop task that I can use as a benchmark?"**
    → `search_neurovault_collections(query="Stroop")`
 
-5. **"For OpenNeuro dataset ds000030, list every paper that has been published using it."**
-   → `find_papers_using_dataset(openneuro_accession="ds000030")`
+5. **"For PubMed paper 26178017, are there any associated brain maps on NeuroVault?"**
+   → `find_neurovault_maps_for_paper(pmid="26178017")` — returns collection 1345 with `doi_exact` evidence.
+
+   The reverse direction (`find_papers_using_dataset`) works less reliably because OpenNeuro's `associatedPaperDOI` field is rarely populated by uploaders; the tool resolves the dataset's own DOI which by design isn't a PubMed paper. v0.4 OpenAlex enrichment is the planned fix — see [ROADMAP_v0.4.md](ROADMAP_v0.4.md).
 
 6. **"Compare reproducibility studies of the n-back task. Find papers, datasets they used, and brain maps they published."**
    → `comprehensive_literature_search(research_question="n-back working memory reproducibility")`

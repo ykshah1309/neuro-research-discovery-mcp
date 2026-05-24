@@ -64,11 +64,20 @@ Fully **Quit** Claude Desktop (system tray → Quit, not just close window) and 
 
 ### Sanity check (~1 minute, on demo morning)
 
+First, confirm the NeuroVault cache is still warm — **do this before any rebuild**. The
+benchmark script in step 0 intentionally deletes and rebuilds the index; you do NOT
+want that on demo day if the cache is already fresh.
+
 ```powershell
-python -c "import asyncio; from neuro_research_discovery.tools.neurovault_tools import get_neurovault_cache_status; from neuro_research_discovery.clients.neurovault import NeuroVaultClient; from neuro_research_discovery.models import NeuroVaultCacheStatusInput; asyncio.run((lambda: __import__('asyncio').get_event_loop().run_until_complete(get_neurovault_cache_status(NeuroVaultCacheStatusInput(), NeuroVaultClient()).__await__()))())"
+python -c "import asyncio; from neuro_research_discovery.tools.neurovault_tools import get_neurovault_cache_status; from neuro_research_discovery.clients.neurovault import NeuroVaultClient; from neuro_research_discovery.models import NeuroVaultCacheStatusInput; print(asyncio.run(get_neurovault_cache_status(NeuroVaultCacheStatusInput(), NeuroVaultClient())).model_dump_json(indent=2))"
 ```
 
-…or, less ugly, the same in Claude Desktop:
+Read the `status` field:
+- `fresh` → done, nothing to do.
+- `stale_but_serveable` → safe for the demo (background refresh will run on first call).
+- `expired` or `missing` → re-run `python scripts/bench_neurovault_cold.py` now; budget 3 minutes.
+
+You can also do the same from inside Claude Desktop once the server is configured:
 
 > "Use `get_neurovault_cache_status` to check the NeuroVault cache state."
 
