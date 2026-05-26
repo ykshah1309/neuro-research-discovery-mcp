@@ -13,7 +13,7 @@ bug fix) and the immediately-following fix commit.
 |---|---|
 | Repository | <https://github.com/ykshah1309/neuro-research-discovery-mcp> |
 | License | **MIT** (full text in `LICENSE`) |
-| Author | Yash Kamlesh Shah (`yash@avarieux.com`) |
+| Author | Yash Kamlesh Shah (`ykshah1309@gmail.com`) |
 | Sibling repo | <https://github.com/ykshah1309/nifti-inspector-mcp> (local NIfTI file inspection MCP) |
 | Current version | `0.1.0` (set in `pyproject.toml`) |
 | HEAD at writing | `74df33f0bdf9801388680de7bac452aff7d21d49` + the disk-cache TTL fix that follows this commit |

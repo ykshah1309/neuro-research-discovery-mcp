@@ -12,7 +12,7 @@ spaces — you agree to abide by its terms.
 ## Reporting
 
 To report behavior you believe violates this code of conduct, contact
-the maintainer privately at **yash@avarieux.com**. Reports will be
+the maintainer privately at **ykshah1309@gmail.com**. Reports will be
 handled with discretion and confidentiality to the extent compatible
 with addressing the report.
 

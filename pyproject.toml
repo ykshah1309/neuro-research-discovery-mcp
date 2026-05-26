@@ -10,7 +10,7 @@ readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
 authors = [
-    { name = "Yash Kamlesh Shah", email = "yash@avarieux.com" }
+    { name = "Yash Kamlesh Shah", email = "ykshah1309@gmail.com" }
 ]
 keywords = [
     "mcp", "model-context-protocol", "neuroimaging",
