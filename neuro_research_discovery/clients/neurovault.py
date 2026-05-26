@@ -128,6 +128,14 @@ class NeuroVaultClient:
         4. Otherwise: build synchronously and persist.
 
         With `force_refresh=True`, skip cache lookups and rebuild now.
+
+        Time-source discipline: `self._index_built_at` ALWAYS holds a
+        `time.monotonic()` value — the moment we last loaded or built the
+        index *in this process*. The disk entry's wall-clock `built_at`
+        is consulted only via `is_fresh(entry)` / `is_serveable(entry)`,
+        never copied into the monotonic field. Mixing the two units (an
+        earlier bug) made stale disk caches look freshly built and broke
+        the 24 h TTL silently.
         """
         if not force_refresh:
             # 1. In-process
@@ -136,12 +144,15 @@ class NeuroVaultClient:
             # 2 + 3. Disk
             entry = load_neurovault_index()
             if entry:
-                self._index = entry["projections"]
-                self._index_built_at = float(entry.get("built_at") or 0.0)
-                self.index_partial = bool(entry.get("partial", False))
                 if is_fresh(entry):
+                    self._index = entry["projections"]
+                    self._index_built_at = time.monotonic()
+                    self.index_partial = bool(entry.get("partial", False))
                     return self._index
                 if is_serveable(entry):
+                    self._index = entry["projections"]
+                    self._index_built_at = time.monotonic()
+                    self.index_partial = bool(entry.get("partial", False))
                     self._schedule_background_refresh()
                     return self._index
                 # Stale beyond 2x TTL → fall through to sync rebuild.
